@@ -62,6 +62,20 @@ By integrating AI-driven analysis with real-time data, farmers will have an inno
                 ''')
 
 
+#About page
+elif (mode=="About"):
+    st.header("About")
+    st.markdown('''The Dataset being used for training the model is a comprehensive collection of images depicting various diseases affecting major crops including **wheat, maize, cotton, sugarcane, and rice**.
+
+The dataset contains a diverse range of crop disease images, meticulously curated from multiple sources to ensure completeness and relevance. It encompasses images of common and rare diseases afflicting each crop, captured at different stages of development and severity.")
+
+### Contents:
+
+1. Train dataset contains 15452 images
+2. Test set contains 3172 images
+3. There are a total of 42 classes in which these images are categorised into.
+''')
+
 
 
 
