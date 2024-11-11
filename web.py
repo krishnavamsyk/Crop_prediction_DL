@@ -162,7 +162,7 @@ def model_prediction(test_image):
         'Wheat_Brown_rust', 'Wheat_Healthy', 'Wheat_Loose_Smut', 'Wheat_Yellow_rust'
     ]
 
-    model1 = YOLO('best.pt')  # Load last custom model
+    model1 = YOLO(r'Models\best.pt')  # Load last custom model
     
     # Save the uploaded image to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
@@ -553,7 +553,7 @@ elif mode=="🌱 Crop recommender":
 
             # Load the model (ensure the path to the model is correct)
             try:
-                model = joblib.load('Naive_bayes_crp.pkl')
+                model = joblib.load(r'Models\Naive_bayes_crp.pkl')
             except FileNotFoundError:
                 st.error("Model file 'Naive_bayes_crp.pkl' not found. Please check the file path.")
                 raise
@@ -645,7 +645,7 @@ elif mode=="🧪 Fertilizer recommender":
 
        
             # Load the model (ensure the path to the model is correct)
-            model = joblib.load('svm_model.pkl_2')
+            model = joblib.load(r'Models\svm_model.pkl_2')
 
             #input array to model
             data=np.array([temp,humid,moist,soil_mapping[soil_input],crop_mapping[crop_input],N_input,K_input,P_input])
