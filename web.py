@@ -589,7 +589,7 @@ elif mode=="🧪 Fertilizer recommender":
     st.write("")
     # Create two columns for the form inputs
     col1, col2 = st.columns([1, 1])  # This will give both columns equal width
-    
+    #hi
     crop_mapping = {
     'rice': 0,
     'Wheat': 1,
