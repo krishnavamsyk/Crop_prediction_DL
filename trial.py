@@ -1,5 +1,3 @@
-#importing libraries
-
 import streamlit as st
 import geocoder
 import requests
@@ -17,10 +15,7 @@ from ultralytics import YOLO
 import tempfile
 from PIL import Image
 import base64
-from English_code_ppl import Englsh
-from Hindi_code_ppl import Hindi
 
-#functions
  #functions
 # Function to automatically get user location based on IP
 def get_user_location():
@@ -39,7 +34,7 @@ def get_weather_forecast(lat, lon):
     API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'  # Replace with your OpenWeatherMap API key
     URL = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
     response = requests.get(URL)
-    if response.status_code == 200:
+    if response:
         data = response.json()
         forecast_data = []
         for forecast in data.get('list', []):  # Use .get() to handle missing 'list'
@@ -115,41 +110,59 @@ def calculate_averages_and_precautions(forecast_df,x):
     return avg_temp,avg_humidity,avg_precipitation,avg_windspeed
 
 
+st.title('Weather Forecast and Crop Precautions')
+st.write('')
+st.write('')
 
-def model_prediction(test_image):
-    global classes
-    classes = [
-        'Apple__Apple_scab', 'Apple_Black_rot', 'Apple_healthy', 'Corn_Blight', 'Corn_Common_Rust',
-        'Corn_Gray_Leaf_Spot', 'Corn_Healthy', 'Cotton_Healthy', 'Cotton_bacterial_blight', 'Cotton_curl_virus',
-        'Grape_Black_rot', 'Grape_Leaf_blight(Isariopsis_Leaf_Spot)', 'Grape__healthy', 
-        'Pepper,_bell_Bacterial_spot', 'Pepper,_bell_healthy', 'Potato_Early_blight', 
-        'Potato_Late_blight', 'Potato_healthy', 'Rice_Healthy', 'Rice_bacterial_leaf_blight', 
-        'Rice_brown_spot', 'Rice_leaf_blast', 'Sugarcan_Mosaic', 'Sugarcane_Healthy', 
-        'Sugarcane_RedRot', 'Sugarcane_Rust', 'Sugarcane_Yellow', 'Tomato_Bacterial_spot', 
-        'Tomato_Early_blight', 'Tomato_Late_blight', 'Tomato_Septoria_leaf_spot', 'Tomato__healthy', 
-        'Wheat_Brown_rust', 'Wheat_Healthy', 'Wheat_Loose_Smut', 'Wheat_Yellow_rust'
-    ]
+# Show loading spinner while detecting location
+with st.spinner("Detecting your location..."):
+    location, city, country = get_user_location()
+    time.sleep(2)  # Optional: simulate loading delay for demonstration purposes
 
-    model1 = YOLO(r'Models\best.pt')  # Load last custom model
+# Get user location
+location, city, country = get_user_location()
+
+if location:
+    st.success(f"Detected Location: **{city}, {country}** (Lat: {location[0]}, Lon: {location[1]})")
+    st.write('')
+    st.write('')
+    # Fetch and display weather forecast
+    forecast_df = get_weather_forecast(location[0], location[1])
+    plot_weather_forecast(forecast_df)
+
+    # Calculate averages and give precautions
+    st.write('')  # Adding space for better readability
+    st.write('')
+    avg_temp,avg_humidity,avg_precipitation,avg_windspeed=calculate_averages_and_precautions(forecast_df,5)
+    # Display average values
+    st.subheader('5-Day Average Weather Forecast')
+    st.write('')
+    st.write(f"**Average Temperature:** {avg_temp:.2f}°C")
+    st.write(f"**Average Humidity:** {avg_humidity:.2f}%")
+    st.write(f"**Average Precipitation:** {avg_precipitation:.2f} mm")
+    st.write(f"**Average Windspeed:** {avg_windspeed:.2f} m/s") 
+    st.write('')
     
-    # Save the uploaded image to a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-        # Convert to PIL image for compatibility
-        image = Image.open(test_image)
-        image = image.convert('RGB')  # Ensure 3 channels
-        image.save(tmp_file.name)
-        tmp_image_path = tmp_file.name
-
-    # Perform inference
-    results1 = model1(tmp_image_path)
-    probs1 = results1[0].probs.data.tolist()
-    return classes[np.argmax(probs1)]
-
-# Language selector
-selected_language = st.sidebar.selectbox("SELECT YOUR LANGUAGE:", options=['English','हिंदी'])
-
-
-if selected_language=='English':
-    Englsh()
+    # Display crop precautions based on averages
+    st.subheader('Recommended Precautions')
+    st.write('')
+    if avg_temp > 35:
+        st.write("⚠️ **Precaution:** High average temperature. Consider irrigating crops to prevent heat stress.")
+    elif avg_temp < 15:
+        st.write("⚠️ **Precaution:** Low average temperature. Cover sensitive crops to protect them from cold damage.")
+    
+    if avg_humidity > 80:
+        st.write("⚠️ **Precaution:** High humidity. Monitor for fungal diseases such as mildew and rust.")
+    
+    if avg_precipitation > 5:
+        st.write("⚠️ **Precaution:** Heavy rainfall expected. Ensure proper drainage to avoid waterlogging and root rot.")
+    elif avg_precipitation == 0:
+        st.write("⚠️ **Precaution:** No rainfall expected. Consider irrigation to maintain soil moisture.")
+    
+    if avg_windspeed > 15:
+        st.write("-High winds can damage crops. Secure loose plants.\n")
+    
+    st.write('')
+    st.write('')   
 else:
-    Hindi()
+    st.write("Sorry, could not determine your location. Please try again.")
