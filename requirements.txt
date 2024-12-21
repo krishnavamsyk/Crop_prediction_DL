@@ -1,2 +1,6 @@
 streamlit
 geocoder
+matplotlib
+pandas
+datetime
+tensorflow
