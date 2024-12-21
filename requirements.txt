@@ -5,7 +5,7 @@ pandas
 datetime
 tensorflow
 streamlit-option-menu
-YOLO
+ultralytics
 Image
 
 
