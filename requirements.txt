@@ -1,11 +1,11 @@
-streamlit
+streamlit==1.25.0
 geocoder
 matplotlib
 pandas
 datetime
 tensorflow
 streamlit-option-menu
-ultralytics
+ultralytics==8.0.20
 Image
 libgl1
 libglib2.0-0
