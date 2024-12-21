@@ -7,5 +7,8 @@ tensorflow
 streamlit-option-menu
 ultralytics
 Image
+libgl1
+libglib2.0-0
+
 
 
