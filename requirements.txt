@@ -8,5 +8,5 @@ joblib
 torch
 YOLO
 Image
-base64
+
 
