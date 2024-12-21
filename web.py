@@ -7,16 +7,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime
 import tensorflow as tf
-import numpy as np
-import base64
-import time
-import joblib   
+import numpy as np  
 from streamlit_option_menu import option_menu
-import torch
 from ultralytics import YOLO
 import tempfile
 from PIL import Image
-import base64
 from English_code_ppl import Englsh
 from Hindi_code_ppl import Hindi
 

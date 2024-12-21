@@ -1883,7 +1883,7 @@ sugarcane yellwing
         # Actions after form submission
         if submit_button:
             try:
-                # Preprocess inputs (convert text inputs to numeric values)
+        # Preprocess inputs (convert text inputs to numeric values)
                 temp = float(temp_input)
                 humid = float(humid_input)
                 ph = float(ph_input)
@@ -1897,7 +1897,7 @@ sugarcane yellwing
 
                 # Load the model (ensure the path to the model is correct)
                 try:
-                    model = joblib.load('Naive_bayes_crp.pkl')
+                    model = joblib.load(r'Models\Naive_bayes_crp.pkl')
                 except FileNotFoundError:
                     st.error("Model file 'Naive_bayes_crp.pkl' not found. Please check the file path.")
                     raise

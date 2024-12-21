@@ -375,7 +375,7 @@ def Englsh():
 
 
     By implementing these practices, potato crops can be protected from early blight, ensuring healthier plants and better yields.""")
-                if result == 'Potato_Late_blight':
+                elif result == 'Potato_Late_blight':
                         st.header("Potato Late Blight")
                         st.markdown("""
     Potato Late Blight is a devastating disease caused by the oomycete pathogen Phytophthora infestans. It is notorious for causing the Irish Potato Famine and continues to be a major threat to potato production, especially in areas with cool, wet weather.
