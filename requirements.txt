@@ -4,3 +4,10 @@ matplotlib
 pandas
 datetime
 tensorflow
+joblib
+torch
+YOLO
+tempfile
+Image
+base64
+
