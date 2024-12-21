@@ -1,0 +1,13 @@
+streamlit
+geocoder
+matplotlib
+pandas
+datetime
+tensorflow
+joblib
+option_menu
+torch
+YOLO
+Image
+
+
