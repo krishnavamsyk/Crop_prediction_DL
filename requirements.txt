@@ -4,7 +4,7 @@ matplotlib
 pandas
 datetime
 tensorflow
-option_menu
+streamlit-option-menu
 YOLO
 Image
 
