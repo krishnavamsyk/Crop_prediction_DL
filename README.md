@@ -61,6 +61,4 @@
 <h2>🎯 Conclusion</h2>
 <p>Our AI-powered smart agriculture system aims to revolutionize farming by providing predictive insights that help farmers make informed decisions. By integrating technology with agriculture, we contribute to a more efficient, sustainable, and productive farming ecosystem. 🌱🚜🌍</p>
 
-<p>📌 <b>GitHub Repository:</b> <a href="#">Your Repo Link</a></p>
 
-<p>💡 <b>Let's build the future of farming together!</b></p>
