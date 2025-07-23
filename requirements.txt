@@ -2,13 +2,12 @@ streamlit==1.25.0
 geocoder
 matplotlib
 pandas
-datetime
 tensorflow
 streamlit-option-menu
-ultralytics>=8.0.20
+ultralytics>=8.0.35
 opencv-python-headless
-Image
 pillow==10.2.0
+
 
 
 
