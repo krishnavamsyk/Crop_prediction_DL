@@ -8,6 +8,7 @@ streamlit-option-menu
 ultralytics>=8.0.20
 opencv-python-headless
 Image
+pillow==10.2.0
 
 
 
