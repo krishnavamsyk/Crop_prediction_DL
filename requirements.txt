@@ -5,10 +5,10 @@ pandas
 datetime
 tensorflow
 streamlit-option-menu
-ultralytics==8.0.20
+ultralytics>=8.0.20
+opencv-python-headless
 Image
-libgl1
-libglib2.0-0
+
 
 
 
