@@ -1,4 +1,4 @@
-# Crop_prediction_DL
+# GreenWatch AI
 
 
 <h2>🚀 Project Overview</h2>
