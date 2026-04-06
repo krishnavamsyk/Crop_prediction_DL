@@ -19,7 +19,7 @@ from Hindi_code_ppl import Hindi
  #functions
 # Function to automatically get user location based on IP
 def get_user_location():
-    city_input = st.text_input("🌍 Enter your city name", value="Hyderabad")
+    city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_main")
     
     if city_input:
         g = geocoder.osm(city_input)
