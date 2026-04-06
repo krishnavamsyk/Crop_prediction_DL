@@ -1997,7 +1997,18 @@ def Englsh():
 
         # Show loading spinner while detecting location
         with st.spinner("Detecting your location..."):
-            location, city, country = get_user_location()
+            city_input = st.text_input("🌍 Enter your city name", value="Hyderabad")
+            if st.button("Get Weather Forecast"):
+                g = geocoder.arcgis(city_input)  # more reliable than osm
+                if g.ok:
+                    lat, lng = g.lat, g.lng
+                    st.success(f"Location: **{city_input}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
+                    forecast_df = get_weather_forecast(lat, lng)
+                    if not forecast_df.empty:
+                        plot_weather_forecast(forecast_df)
+                        # rest of your existing code...
+                else:
+                    st.error("City not found. Try another spelling.")
             time.sleep(2)  # Optional: simulate loading delay for demonstration purposes
 
         # Get user location
