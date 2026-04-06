@@ -31,7 +31,8 @@ def get_user_location():
 
 # Function to fetch weather forecast from OpenWeatherMap API
 def get_weather_forecast(lat, lon):
-    API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'  # Replace with your OpenWeatherMap API key
+    # API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'
+    API_KEY = st.secrets["OPENWEATHER_API_KEY"] # Replace with your OpenWeatherMap API key
     URL = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
     response = requests.get(URL)
     if response.status_code == 200:
