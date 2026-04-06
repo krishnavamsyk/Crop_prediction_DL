@@ -2061,49 +2061,49 @@ def Englsh():
     #             st.error("City not found. Please check spelling and try again.")
     
     elif mode == "🌥️ 5-Day forecast":
-    st.title('Weather Forecast and Crop Precautions')
-    st.write('')
-    st.write('')
-    
-    city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_english")
-    
-    if st.button("Get Weather Forecast", key="weather_btn_english"):
-        g = geocoder.arcgis(city_input)
-        if g.ok:
-            lat, lng = g.lat, g.lng
-            st.success(f"Detected Location: **{city_input}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
-            st.write('')
-            st.write('')
-            forecast_df = get_weather_forecast(lat, lng)
-            plot_weather_forecast(forecast_df)
-            st.write('')
-            st.write('')
-            avg_temp, avg_humidity, avg_precipitation, avg_windspeed = calculate_averages_and_precautions(forecast_df, 5)
-            st.subheader('5-Day Average Weather Forecast')
-            st.write('')
-            st.write(f"**Average Temperature:** {avg_temp:.2f}°C")
-            st.write(f"**Average Humidity:** {avg_humidity:.2f}%")
-            st.write(f"**Average Precipitation:** {avg_precipitation:.2f} mm")
-            st.write(f"**Average Windspeed:** {avg_windspeed:.2f} m/s")
-            st.write('')
-            st.subheader('Recommended Precautions')
-            st.write('')
-            if avg_temp > 35:
-                st.write("⚠️ **Precaution:** High average temperature. Consider irrigating crops to prevent heat stress.")
-            elif avg_temp < 15:
-                st.write("⚠️ **Precaution:** Low average temperature. Cover sensitive crops to protect them from cold damage.")
-            if avg_humidity > 80:
-                st.write("⚠️ **Precaution:** High humidity. Monitor for fungal diseases such as mildew and rust.")
-            if avg_precipitation > 5:
-                st.write("⚠️ **Precaution:** Heavy rainfall expected. Ensure proper drainage to avoid waterlogging and root rot.")
-            elif avg_precipitation == 0:
-                st.write("⚠️ **Precaution:** No rainfall expected. Consider irrigation to maintain soil moisture.")
-            if avg_windspeed > 15:
-                st.write("⚠️ High winds can damage crops. Secure loose plants.")
-            st.write('')
-            st.write('')
-        else:
-            st.error("City not found. Please check spelling and try again.")
+       st.title('Weather Forecast and Crop Precautions')
+       st.write('')
+       st.write('')
+       
+       city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_english")
+       
+       if st.button("Get Weather Forecast", key="weather_btn_english"):
+           g = geocoder.arcgis(city_input)
+           if g.ok:
+               lat, lng = g.lat, g.lng
+               st.success(f"Detected Location: **{city_input}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
+               st.write('')
+               st.write('')
+               forecast_df = get_weather_forecast(lat, lng)
+               plot_weather_forecast(forecast_df)
+               st.write('')
+               st.write('')
+               avg_temp, avg_humidity, avg_precipitation, avg_windspeed = calculate_averages_and_precautions(forecast_df, 5)
+               st.subheader('5-Day Average Weather Forecast')
+               st.write('')
+               st.write(f"**Average Temperature:** {avg_temp:.2f}°C")
+               st.write(f"**Average Humidity:** {avg_humidity:.2f}%")
+               st.write(f"**Average Precipitation:** {avg_precipitation:.2f} mm")
+               st.write(f"**Average Windspeed:** {avg_windspeed:.2f} m/s")
+               st.write('')
+               st.subheader('Recommended Precautions')
+               st.write('')
+               if avg_temp > 35:
+                   st.write("⚠️ **Precaution:** High average temperature. Consider irrigating crops to prevent heat stress.")
+               elif avg_temp < 15:
+                   st.write("⚠️ **Precaution:** Low average temperature. Cover sensitive crops to protect them from cold damage.")
+               if avg_humidity > 80:
+                   st.write("⚠️ **Precaution:** High humidity. Monitor for fungal diseases such as mildew and rust.")
+               if avg_precipitation > 5:
+                   st.write("⚠️ **Precaution:** Heavy rainfall expected. Ensure proper drainage to avoid waterlogging and root rot.")
+               elif avg_precipitation == 0:
+                   st.write("⚠️ **Precaution:** No rainfall expected. Consider irrigation to maintain soil moisture.")
+               if avg_windspeed > 15:
+                   st.write("⚠️ High winds can damage crops. Secure loose plants.")
+               st.write('')
+               st.write('')
+           else:
+               st.error("City not found. Please check spelling and try again.")
 
     elif mode=="🌱 Crop recommender":
         
