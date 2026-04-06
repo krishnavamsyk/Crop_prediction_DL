@@ -4,8 +4,8 @@ matplotlib
 pandas
 tensorflow
 streamlit-option-menu
-ultralytics==8.0.196
-opencv-python-headless==4.8.1.78
+ultralytics
+opencv-python-headless
 pillow
 joblib
 scikit-learn
