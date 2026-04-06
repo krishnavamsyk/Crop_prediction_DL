@@ -19,15 +19,6 @@ from Hindi_code_ppl import Hindi
  #functions
 # Function to automatically get user location based on IP
 def get_user_location():
-    # g = geocoder.ip('me')
-    # if g.ok:
-    #     location = g.latlng  # Get latitude and longitude
-    #     city = g.city if g.city else "Unknown"  # Safeguard in case of missing city
-    #     country = g.country if g.country else "Unknown"
-    #     return location, city, country
-    # else:
-    #     st.warning("Unable to detect location. Using default location coordinates.")
-    #     return [0, 0], "Unknown", "Unknown"
     city_input = st.text_input("🌍 Enter your city name", value="Hyderabad")
     
     if city_input:
