@@ -21,19 +21,26 @@ def Englsh():
     #functions
     # Function to automatically get user location based on IP
     def get_user_location():
-        g = geocoder.ip('me')
-        if g.ok:
-            location = g.latlng  # Get latitude and longitude
-            city = g.city if g.city else "Unknown"  # Safeguard in case of missing city
-            country = g.country if g.country else "Unknown"
-            return location, city, country
-        else:
-            st.warning("Unable to detect location. Using default location coordinates.")
-            return [0, 0], "Unknown", "Unknown"
+        city_input = st.text_input("🌍 Enter your city name", value="Hyderabad")
+        
+        if st.button("Get Weather Forecast"):
+            g = geocoder.osm(city_input)
+            if g.ok:
+                lat, lng = g.lat, g.lng
+                city = g.city if g.city else city_input
+                country = g.country if g.country else "Unknown"
+                st.success(f"Detected Location: **{city}, {country}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
+                
+                forecast_df = get_weather_forecast(lat, lng)
+                if not forecast_df.empty:
+                    plot_weather_forecast(forecast_df)
+            else:
+                st.error("City not found. Please check spelling.")
 
     # Function to fetch weather forecast from OpenWeatherMap API
     def get_weather_forecast(lat, lon):
-        API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'  # Replace with your OpenWeatherMap API key
+        # API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'
+        API_KEY = st.secrets["OPENWEATHER_API_KEY"]  # Replace with your OpenWeatherMap API key
         URL = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
         response = requests.get(URL)
         if response.status_code == 200:
