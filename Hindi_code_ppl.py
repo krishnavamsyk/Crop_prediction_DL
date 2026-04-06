@@ -24,7 +24,7 @@ def Hindi():
         #functions
     # Function to automatically get user location based on IP
     def get_user_location():
-        city_input = st.text_input("🌍 Enter your city name", value="Hyderabad")
+        city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_hindi")
 
         if st.button("Get Weather Forecast"):
             g = geocoder.osm(city_input)
