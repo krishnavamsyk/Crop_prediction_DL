@@ -18,22 +18,22 @@ from Hindi_code_ppl import Hindi
 #functions
  #functions
 # Function to automatically get user location based on IP
-def get_user_location():
-    city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_main")
+# def get_user_location():
+#     city_input = st.text_input("🌍 Enter your city name", value="Hyderabad", key="city_input_main")
     
-    if city_input:
-        g = geocoder.osm(city_input)
-        if g.ok:
-            lat, lng = g.lat, g.lng
-            city = g.city if g.city else city_input
-            country = g.country if g.country else "Unknown"
-            st.success(f"Detected Location: **{city}, {country}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
-            return [lat, lng], city, country
-        else:
-            st.error("City not found. Please check the spelling and try again.")
-            return [0, 0], "Unknown", "Unknown"
-    else:
-        return [0, 0], "Unknown", "Unknown"
+#     if city_input:
+#         g = geocoder.osm(city_input)
+#         if g.ok:
+#             lat, lng = g.lat, g.lng
+#             city = g.city if g.city else city_input
+#             country = g.country if g.country else "Unknown"
+#             st.success(f"Detected Location: **{city}, {country}** (Lat: {round(lat,4)}, Lon: {round(lng,4)})")
+#             return [lat, lng], city, country
+#         else:
+#             st.error("City not found. Please check the spelling and try again.")
+#             return [0, 0], "Unknown", "Unknown"
+#     else:
+#         return [0, 0], "Unknown", "Unknown"
 
 # Function to fetch weather forecast from OpenWeatherMap API
 def get_weather_forecast(lat, lon):
