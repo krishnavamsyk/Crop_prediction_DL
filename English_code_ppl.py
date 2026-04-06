@@ -134,7 +134,7 @@ def Englsh():
             'Wheat_Brown_rust', 'Wheat_Healthy', 'Wheat_Loose_Smut', 'Wheat_Yellow_rust'
         ]
 
-        model1 = YOLO(r'Models\best.pt')  # Load last custom model
+        model1 = YOLO('Models/best.pt')  # Load last custom model
         
         # Save the uploaded image to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
