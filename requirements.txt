@@ -7,3 +7,4 @@ streamlit-option-menu
 ultralytics>=8.0.35
 opencv-python-headless
 pillow
+joblib
