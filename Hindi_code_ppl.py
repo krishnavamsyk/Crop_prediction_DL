@@ -453,62 +453,49 @@ def Hindi():
 
 
     elif mode == "🌥️ 5-दिवसीय पूर्वानुमान":
-        st.title('मौसम पूर्वानुमान और फसल संबंधी सावधानियाँ')
-        st.write('')
-        st.write('')
-
-        # Show loading spinner while detecting location
-        with st.spinner("आपके स्थान का पता लगाया जा रहा है..."):
-            location, city, country = get_user_location()
-            time.sleep(2)  # Optional: simulate loading delay for demonstration purposes
-
-        # Get user location
-        location, city, country = get_user_location()
+            st.title('मौसम पूर्वानुमान और फसल संबंधी सावधानियाँ')
+            st.write('')
+            st.write('')
         
-        if location:
-            st.success(f"स्थान का पता चला: {city}, {country} (अक्षांश: {location[0]}, देशान्तर: {location[1]})")
-            st.write('')
-            st.write('')
-            # Fetch and display weather forecast
-            forecast_df = get_weather_forecast(location[0], location[1])
-            plot_weather_forecast(forecast_df)
+            city_input = st.text_input("🌍 अपने शहर का नाम दर्ज करें", value="Hyderabad", key="city_input_hindi")
         
-            # Calculate averages and give precautions
-            st.write('')  # Adding space for better readability
-            st.write('')
-            avg_temp,avg_humidity,avg_precipitation,avg_windspeed=calculate_averages_and_precautions(forecast_df,5)
-            # Display average values
-            st.subheader('5-दिवसीय औसत मौसम पूर्वानुमान')
-            st.write('')
-            st.write(f"औसत तापमान: {avg_temp:.2f}°C")
-            st.write(f"औसत आर्द्रता: {avg_humidity:.2f}%")
-            st.write(f"औसत वर्षा: {avg_precipitation:.2f} mm")
-            st.write(f"औसत हवा की गति: {avg_windspeed:.2f} m/s") 
-            st.write('')
-            
-            # Display crop precautions based on averages
-            st.subheader('अनुशंसित सावधानियां')
-            st.write('')
-            if avg_temp > 35:
-                st.write("⚠ एहतियात: उच्च औसत तापमान। गर्मी के तनाव से बचने के लिए फसलों की सिंचाई करने पर विचार करें.")
-            elif avg_temp < 15:
-                st.write("⚠ सावधानी: कम औसत तापमान। संवेदनशील फसलों को ठंड से होने वाले नुकसान से बचाने के लिए उन्हें ढकें.")
-            
-            if avg_humidity > 80:
-                st.write("⚠ सावधानी: उच्च आर्द्रता। फफूंदी और जंग जैसी फंगल बीमारियों की निगरानी करें.")
-            
-            if avg_precipitation > 5:
-                st.write("⚠ सावधानी: भारी वर्षा की आशंका। जलभराव और जड़ सड़न से बचने के लिए उचित जल निकासी सुनिश्चित करें.")
-            elif avg_precipitation == 0:
-                st.write("⚠ सावधानी: वर्षा की संभावना नहीं। मिट्टी की नमी बनाए रखने के लिए सिंचाई पर विचार करें.")
-            
-            if avg_windspeed > 15:
-                st.write("-तेज़ हवाएँ फसलों को नुकसान पहुँचा सकती हैं। ढीले पौधों को सुरक्षित करें.\n")
-            
-            st.write('')
-            st.write('')   
-        else:
-            st.write("क्षमा करें, आपका स्थान निर्धारित नहीं किया जा सका। कृपया पुन: प्रयास करें.")
+            if st.button("मौसम पूर्वानुमान प्राप्त करें", key="weather_btn_hindi"):
+                g = geocoder.arcgis(city_input)
+                if g.ok:
+                    lat, lng = g.lat, g.lng
+                    st.success(f"स्थान का पता चला: **{city_input}** (अक्षांश: {round(lat,4)}, देशान्तर: {round(lng,4)})")
+                    st.write('')
+                    st.write('')
+                    forecast_df = get_weather_forecast(lat, lng)
+                    plot_weather_forecast(forecast_df)
+                    st.write('')
+                    st.write('')
+                    avg_temp, avg_humidity, avg_precipitation, avg_windspeed = calculate_averages_and_precautions(forecast_df, 5)
+                    st.subheader('5-दिवसीय औसत मौसम पूर्वानुमान')
+                    st.write('')
+                    st.write(f"औसत तापमान: {avg_temp:.2f}°C")
+                    st.write(f"औसत आर्द्रता: {avg_humidity:.2f}%")
+                    st.write(f"औसत वर्षा: {avg_precipitation:.2f} mm")
+                    st.write(f"औसत हवा की गति: {avg_windspeed:.2f} m/s")
+                    st.write('')
+                    st.subheader('अनुशंसित सावधानियां')
+                    st.write('')
+                    if avg_temp > 35:
+                        st.write("⚠️ एहतियात: उच्च औसत तापमान। गर्मी के तनाव से बचने के लिए फसलों की सिंचाई करने पर विचार करें.")
+                    elif avg_temp < 15:
+                        st.write("⚠️ सावधानी: कम औसत तापमान। संवेदनशील फसलों को ठंड से होने वाले नुकसान से बचाने के लिए उन्हें ढकें.")
+                    if avg_humidity > 80:
+                        st.write("⚠️ सावधानी: उच्च आर्द्रता। फफूंदी और जंग जैसी फंगल बीमारियों की निगरानी करें.")
+                    if avg_precipitation > 5:
+                        st.write("⚠️ सावधानी: भारी वर्षा की आशंका। जलभराव और जड़ सड़न से बचने के लिए उचित जल निकासी सुनिश्चित करें.")
+                    elif avg_precipitation == 0:
+                        st.write("⚠️ सावधानी: वर्षा की संभावना नहीं। मिट्टी की नमी बनाए रखने के लिए सिंचाई पर विचार करें.")
+                    if avg_windspeed > 15:
+                        st.write("⚠️ तेज़ हवाएँ फसलों को नुकसान पहुँचा सकती हैं। ढीले पौधों को सुरक्षित करें.")
+                    st.write('')
+                    st.write('')
+                else:
+                    st.error("शहर नहीं मिला। कृपया वर्तनी जांचें और पुनः प्रयास कर
         
     elif mode=="🦠रोग-पहचान":
         st.markdown("#  रोग-पहचान:")
