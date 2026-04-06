@@ -2150,7 +2150,7 @@ def Englsh():
 
                 # Load the model (ensure the path to the model is correct)
                 try:
-                    model = joblib.load(r'Models\Naive_bayes_crp.pkl')
+                    model = joblib.load('Models/Naive_bayes_crp.pkl')
                 except FileNotFoundError:
                     st.error("Model file 'Naive_bayes_crp.pkl' not found. Please check the file path.")
                     raise
@@ -2242,7 +2242,7 @@ def Englsh():
 
         
                 # Load the model (ensure the path to the model is correct)
-                model = joblib.load(r'Models\svm_model.pkl_2')
+                model = joblib.load('Models/svm_model.pkl_2')
 
                 #input array to model
                 data=np.array([temp,humid,moist,soil_mapping[soil_input],crop_mapping[crop_input],N_input,K_input,P_input])
