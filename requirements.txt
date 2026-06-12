@@ -2,10 +2,9 @@ streamlit
 geocoder
 matplotlib
 pandas
-datetime
-tensorflow
-option_menu
-YOLO
-Image
-
-
+tensorflow-cpu
+streamlit-option-menu
+ultralytics
+Pillow
+numpy
+requests
