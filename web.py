@@ -6,8 +6,7 @@ import requests
 import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime
-import tensorflow as tf
-import numpy as np  
+import numpy as np
 from streamlit_option_menu import option_menu
 from ultralytics import YOLO
 import tempfile
