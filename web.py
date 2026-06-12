@@ -12,7 +12,7 @@ from streamlit_option_menu import option_menu
 from ultralytics import YOLO
 import tempfile
 from PIL import Image
-from English_code_ppl import Englsh
+from English_code_ppl import English
 from Hindi_code_ppl import Hindi
 
 #functions
@@ -145,6 +145,6 @@ selected_language = st.sidebar.selectbox("SELECT YOUR LANGUAGE:", options=['Engl
 
 
 if selected_language=='English':
-    Englsh()
+    English()
 else:
     Hindi()

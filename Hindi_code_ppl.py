@@ -4,1922 +4,674 @@ import requests
 import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime
-import tensorflow as tf
 import numpy as np
 import base64
 import time
-import joblib   
+import joblib
 from streamlit_option_menu import option_menu
-import torch
-from ultralytics import YOLO
 import tempfile
+import os
 from PIL import Image
-import base64
+from ultralytics import YOLO
 
+# ─── Model cache (load once per session) ──────────────────────────────────────
+@st.cache_resource
+def load_yolo_model():
+    return YOLO('Models/best.pt')
 
+@st.cache_resource
+def load_crop_model():
+    return joblib.load('Models/Naive_bayes_crp.pkl')
 
+@st.cache_resource
+def load_fertilizer_model():
+    return joblib.load('Models/svm_model.pkl_2')
 
-#-----------------------------------------------------------------------------
+# ─── Constants ────────────────────────────────────────────────────────────────
+CLASSES = [
+    'Apple__Apple_scab', 'Apple_Black_rot', 'Apple_healthy',
+    'Corn_Blight', 'Corn_Common_Rust', 'Corn_Gray_Leaf_Spot', 'Corn_Healthy',
+    'Cotton_Healthy', 'Cotton_bacterial_blight', 'Cotton_curl_virus',
+    'Grape_Black_rot', 'Grape_Leaf_blight(Isariopsis_Leaf_Spot)', 'Grape__healthy',
+    'Pepper,_bell_Bacterial_spot', 'Pepper,_bell_healthy',
+    'Potato_Early_blight', 'Potato_Late_blight', 'Potato_healthy',
+    'Rice_Healthy', 'Rice_bacterial_leaf_blight', 'Rice_brown_spot', 'Rice_leaf_blast',
+    'Sugarcan_Mosaic', 'Sugarcane_Healthy', 'Sugarcane_RedRot',
+    'Sugarcane_Rust', 'Sugarcane_Yellow',
+    'Tomato_Bacterial_spot', 'Tomato_Early_blight', 'Tomato_Late_blight',
+    'Tomato_Septoria_leaf_spot', 'Tomato__healthy',
+    'Wheat_Brown_rust', 'Wheat_Healthy', 'Wheat_Loose_Smut', 'Wheat_Yellow_rust'
+]
+
+HEALTHY_CLASSES = {c for c in CLASSES if 'healthy' in c.lower() or 'Healthy' in c}
+
+SAMPLE_IMAGES = {
+    "🍅 टमाटर अर्ली ब्लाइट":  "samples/tomato_early_blight.jpg",
+    "🌽 मक्का सामान्य रस्ट":   "samples/corn_common_rust.jpg",
+    "🌾 गेहूं भूरी रस्ट":      "samples/wheat_brown_rust.jpg",
+    "🥔 आलू लेट ब्लाइट":      "samples/potato_late_blight.jpg",
+}
+
+# ─── Disease info database (Hindi) ───────────────────────────────────────────
+DISEASE_INFO_HI = {
+    'Apple__Apple_scab': {
+        "severity": "मध्यम", "spread": "कवक (Venturia inaequalis)",
+        "symptoms": "पत्तियों और फलों पर जैतून-हरे से भूरे मखमली धब्बे; पत्तियाँ मुड़ जाती हैं; फलों पर गहरे उभरे घाव जो फट जाते हैं।",
+        "prevention": "रोधी किस्में लगाएं · गिरी पत्तियाँ हटाएं · उचित छंटाई करें · शुरुआती वसंत में निवारक फफूंदनाशक लगाएं।",
+        "cure": "फफूंदनाशक: myclobutanil, captan, या mancozeb। संक्रमित सामग्री हटाएं और वायु प्रवाह के लिए छंटाई करें।"
+    },
+    'Apple_Black_rot': {
+        "severity": "उच्च", "spread": "कवक (Botryosphaeria obtusa)",
+        "symptoms": "फल पर केंद्रित छल्लों वाले गहरे गोल धंसे घाव; पत्तियों पर बैंगनी किनारे वाले धब्बे; शाखाओं पर कैंकर।",
+        "prevention": "गिरा हुआ मलबा हटाएं · संक्रमित शाखाएं काटें · निवारक फफूंदनाशक लगाएं।",
+        "cure": "कैंकर से 6–12 इंच परे छंटाई करें। फफूंदनाशक: captan या thiophanate-methyl।"
+    },
+    'Corn_Blight': {
+        "severity": "उच्च", "spread": "कवक (Bipolaris maydis / Exserohilum turcicum)",
+        "symptoms": "पत्तियों पर तन, अंडाकार घाव (दक्षिणी) या बड़े सिगार-आकार के भूरे घाव (उत्तरी); पत्तियाँ समय से पहले मर जाती हैं।",
+        "prevention": "रोधी संकर किस्में · फसल चक्र · संक्रमित मलबा हटाएं · उचित दूरी बनाए रखें।",
+        "cure": "फफूंदनाशक: azoxystrobin या propiconazole लक्षण प्रकट होते ही लगाएं।"
+    },
+    'Corn_Common_Rust': {
+        "severity": "मध्यम", "spread": "कवक (Puccinia sorghi)",
+        "symptoms": "पत्तियों के दोनों तरफ छोटे अंडाकार लाल-भूरे फुंसी; पत्तियाँ समय से पहले सूख जाती हैं।",
+        "prevention": "रोधी संकर किस्में · फसल चक्र · ठंडे नम मौसम में निगरानी।",
+        "cure": "स्ट्रोबिलुरिन या ट्राइजोल युक्त फफूंदनाशक। जल्दी उपयोग करें।"
+    },
+    'Corn_Gray_Leaf_Spot': {
+        "severity": "उच्च", "spread": "कवक (Cercospora zeae-maydis)",
+        "symptoms": "पत्ती नसों के समानांतर छोटे आयताकार भूरे-तन घाव जो मिलकर बड़े मृत क्षेत्र बनाते हैं।",
+        "prevention": "रोधी संकर किस्में · फसल चक्र · अवशेष जुताई · उचित पौध दूरी।",
+        "cure": "फफूंदनाशक: azoxystrobin, pyraclostrobin, propiconazole। VT से R1 वृद्धि चरण में लगाएं।"
+    },
+    'Cotton_bacterial_blight': {
+        "severity": "उच्च", "spread": "जीवाणु (Xanthomonas citri pv. malvacearum)",
+        "symptoms": "पत्तियों पर कोणीय पानी-भीगे घाव जो भूरे/काले हो जाते हैं; तनों और टिंडों पर गहरे धंसे धब्बे; पत्ती झड़ना।",
+        "prevention": "रोधी किस्में · प्रमाणित रोगमुक्त बीज · फसल चक्र · सिंचाई में सावधानी।",
+        "cure": "कॉपर हाइड्रॉक्साइड (Kocide) या कॉपर ऑक्सीक्लोराइड छिड़काव। नियमित खेत निगरानी।"
+    },
+    'Cotton_curl_virus': {
+        "severity": "उच्च", "spread": "विषाणु — सफेद मक्खी (Bemisia tabaci) द्वारा",
+        "symptoms": "पत्तियों का ऊपर की ओर मुड़ना; पीलापन; पौधों का बौना होना; मोज़ेक पैटर्न; पत्तियों का समय से पहले गिरना।",
+        "prevention": "सफेद मक्खी नियंत्रण (imidacloprid, thiamethoxam) · रोधी किस्में · संक्रमित पौधे हटाएं।",
+        "cure": "एक बार संक्रमित होने पर कोई इलाज नहीं। सफेद मक्खी नियंत्रण पर ध्यान दें। संक्रमित पौधे उखाड़ें।"
+    },
+    'Grape_Black_rot': {
+        "severity": "उच्च", "spread": "कवक (Guignardia bidwellii)",
+        "symptoms": "अंगूर पर गहरे गोल धंसे घाव; पत्तियों पर पीले प्रभामंडल वाले छोटे गहरे घाव; फल सिकुड़कर काला हो जाता है।",
+        "prevention": "रोधी किस्में · संक्रमित सामग्री हटाएं · वायु प्रवाह सुनिश्चित करें · फूल आने से पहले फफूंदनाशक।",
+        "cure": "फफूंदनाशक: captan, chlorothalonil, या mancozeb। संक्रमित क्षेत्रों की छंटाई।"
+    },
+    'Grape_Leaf_blight(Isariopsis_Leaf_Spot)': {
+        "severity": "मध्यम", "spread": "कवक (Phomopsis viticola)",
+        "symptoms": "पत्तियों पर हल्के भूरे केंद्र वाले छोटे गहरे गोल घाव; अंकुरों पर भूरे धंसे घाव; फल गुच्छों पर पानी-भीगे धब्बे।",
+        "prevention": "रोधी किस्में · संक्रमित बेलों की छंटाई · पर्याप्त वायु प्रवाह · शुरुआती मौसम में फफूंदनाशक।",
+        "cure": "फफूंदनाशक: captan, chlorothalonil, myclobutanil। कली फूटने से पहले छिड़काव शुरू करें।"
+    },
+    'Pepper,_bell_Bacterial_spot': {
+        "severity": "उच्च", "spread": "जीवाणु (Xanthomonas euvesicatoria)",
+        "symptoms": "पत्तियों पर पीले प्रभामंडल वाले कोणीय पानी-भीगे घाव; फल पर गहरे धंसे घाव; पत्ती झड़ना; पौधे का बौना होना।",
+        "prevention": "रोधी किस्में · रोगमुक्त बीज · फसल चक्र · ड्रिप सिंचाई · उचित दूरी।",
+        "cure": "कॉपर हाइड्रॉक्साइड या सल्फेट जीवाणुनाशक। जैविक नियंत्रण: Bacillus subtilis। संक्रमित हिस्से हटाएं।"
+    },
+    'Potato_Early_blight': {
+        "severity": "मध्यम", "spread": "कवक (Alternaria solani)",
+        "symptoms": "पुरानी पत्तियों पर केंद्रित छल्लों वाले गहरे भूरे-काले धब्बे (निशाने जैसे); घावों के आसपास पीलापन; कंद संक्रमण।",
+        "prevention": "फसल चक्र · रोधी किस्में · संक्रमित मलबा हटाएं · ऊपरी सिंचाई से बचें।",
+        "cure": "फफूंदनाशक: chlorothalonil, mancozeb, azoxystrobin। गर्म नम मौसम में निवारक उपचार।"
+    },
+    'Potato_Late_blight': {
+        "severity": "अति-गंभीर", "spread": "ओमाइसीट (Phytophthora infestans)",
+        "symptoms": "पत्तियों पर पानी-भीगे हल्के हरे से गहरे भूरे घाव; पत्ती की निचली सतह पर सफेद रोएँदार फफूंद; कंद सड़न।",
+        "prevention": "रोधी किस्में · प्रमाणित बीज आलू · फसल चक्र · उचित दूरी · ऊपरी सिंचाई से बचें।",
+        "cure": "फफूंदनाशक: chlorothalonil, mancozeb, metalaxyl (Ridomil Gold)। जैविक प्रबंधन में कॉपर स्प्रे।"
+    },
+    'Rice_Healthy': {
+        "severity": "कोई नहीं", "spread": "लागू नहीं",
+        "symptoms": "कोई रोग नहीं पाया गया।",
+        "prevention": "अच्छी प्रथाएं जारी रखें।",
+        "cure": "लागू नहीं"
+    },
+    'Rice_bacterial_leaf_blight': {
+        "severity": "उच्च", "spread": "जीवाणु (Xanthomonas oryzae pv. oryzae)",
+        "symptoms": "पत्ती के किनारों पर पानी-भीगी धारियाँ जो पीली फिर भूरी होती हैं; V-आकार के घाव; पत्तियाँ सूखती हैं; पौधों का बौना होना।",
+        "prevention": "रोधी किस्में · प्रमाणित बीज · फसल अवशेष हटाएं · संतुलित उर्वरक (नाइट्रोजन अधिक न करें)।",
+        "cure": "कॉपर-आधारित जीवाणुनाशक। स्ट्रेप्टोमाइसिन/ऑक्सीटेट्रासाइक्लिन छिड़काव। जैविक: Pseudomonas fluorescens।"
+    },
+    'Rice_brown_spot': {
+        "severity": "मध्यम", "spread": "कवक (Bipolaris oryzae)",
+        "symptoms": "पत्तियों पर भूरे गोल धब्बे जिनका केंद्र भूरा-स्लेटी और किनारे गहरे भूरे; अनाज का रंग बदलना।",
+        "prevention": "पर्याप्त NPK पोषण · प्रमाणित बीज · उचित सिंचाई · फसल चक्र।",
+        "cure": "फफूंदनाशक: mancozeb, tricyclazole, propiconazole। बीज उपचार: carbendazim या thiram।"
+    },
+    'Rice_leaf_blast': {
+        "severity": "अति-गंभीर", "spread": "कवक (Magnaporthe oryzae)",
+        "symptoms": "पत्तियों पर हीरे/धुरी आकार के घाव; कॉलर रॉट; गंभीर मामलों में गांठ और पुष्पगुच्छ ब्लास्ट।",
+        "prevention": "रोधी किस्में · संतुलित नाइट्रोजन · स्थिर जल स्तर · भीड़ से बचें।",
+        "cure": "फफूंदनाशक: tricyclazole, isoprothiolane (Fuji-one), edifenphos (Hinosan)। सिलिकॉन उर्वरण।"
+    },
+    'Sugarcan_Mosaic': {
+        "severity": "मध्यम", "spread": "विषाणु (SCMV) — एफिड द्वारा",
+        "symptoms": "पत्तियों पर हल्के और गहरे हरे मोज़ेक पैटर्न; पौधों का बौना होना; पत्ती विकृति; गन्ने की उपज में कमी।",
+        "prevention": "प्रमाणित रोगमुक्त बीज गन्ना · रोधी किस्में · एफिड नियंत्रण (imidacloprid) · संक्रमित पौधे हटाएं।",
+        "cure": "कोई रासायनिक इलाज नहीं। एफिड वाहक प्रबंधन। संक्रमित पौधे उखाड़ें (रोगिंग)।"
+    },
+    'Sugarcane_RedRot': {
+        "severity": "अति-गंभीर", "spread": "कवक (Colletotrichum falcatum)",
+        "symptoms": "चिरे तने में सफेद धब्बों के साथ लाल रंग; बदबूदार स्पंजी तने; ऊपर से नीचे की ओर पत्तियों का पीला पड़ना।",
+        "prevention": "रोधी किस्में · संक्रमित सामग्री हटाएं · प्रमाणित बीज गन्ना · पर्याप्त जल निकासी।",
+        "cure": "फफूंदनाशक: carbendazim, thiophanate-methyl। गर्म पानी उपचार: 52°C पर 30 मिनट। जैविक: Trichoderma spp।"
+    },
+    'Sugarcane_Rust': {
+        "severity": "मध्यम", "spread": "कवक (Puccinia melanocephala / P. kuehnii)",
+        "symptoms": "पत्तियों की निचली सतह पर लाल-भूरी या नारंगी फुंसियाँ; पीलापन; समय से पहले पत्तियों का मरना।",
+        "prevention": "रोधी किस्में · संक्रमित मलबा हटाएं · संतुलित उर्वरक · पर्याप्त दूरी।",
+        "cure": "फफूंदनाशक: propiconazole, tebuconazole, या mancozeb। पहले लक्षण पर लगाएं।"
+    },
+    'Sugarcane_Yellow': {
+        "severity": "मध्यम", "spread": "विषाणु (ScYLV) — एफिड से या पोषण की कमी",
+        "symptoms": "पुरानी पत्तियों का सिरों से पीला पड़ना; बौना विकास; नस का पीलापन; सुक्रोज में कमी।",
+        "prevention": "रोधी किस्में · एफिड नियंत्रण · संतुलित NPK पोषण · उचित सिंचाई।",
+        "cure": "विषाणु का कोई इलाज नहीं। एफिड प्रबंधन, पत्तेदार पोषक छिड़काव, संक्रमित पौधे हटाएं।"
+    },
+    'Tomato_Bacterial_spot': {
+        "severity": "उच्च", "spread": "जीवाणु (Xanthomonas vesicatoria)",
+        "symptoms": "पत्तियों पर पीले प्रभामंडल के साथ पानी-भीगे धब्बे; पत्ती नेक्रोसिस; फल पर छोटे गहरे धंसे धब्बे।",
+        "prevention": "रोधी किस्में · प्रमाणित बीज · फसल चक्र · ड्रिप सिंचाई · खेत स्वच्छता।",
+        "cure": "कॉपर हाइड्रॉक्साइड जीवाणुनाशक। जैविक: Bacillus subtilis। संक्रमित पौधे हटाएं।"
+    },
+    'Tomato_Early_blight': {
+        "severity": "मध्यम", "spread": "कवक (Alternaria solani)",
+        "symptoms": "पुरानी पत्तियों पर केंद्रित छल्लों वाले गहरे धब्बे; पीलापन; पत्ती झड़ना; तने और फल पर गहरे घाव।",
+        "prevention": "रोधी किस्में · उचित दूरी · फसल चक्र · संक्रमित मलबा हटाएं · ड्रिप सिंचाई।",
+        "cure": "फफूंदनाशक: chlorothalonil, कॉपर-आधारित, mancozeb, azoxystrobin। निचली पत्तियों की छंटाई।"
+    },
+    'Tomato_Late_blight': {
+        "severity": "अति-गंभीर", "spread": "ओमाइसीट (Phytophthora infestans)",
+        "symptoms": "पत्तियों पर तेजी से फैलते पानी-भीगे काले धब्बे; आर्द्रता में सफेद रोएँदार फफूंद; तने के काले घाव; नरम फल सड़न।",
+        "prevention": "रोधी किस्में · उचित दूरी · फसल चक्र · खेत स्वच्छता · ड्रिप सिंचाई।",
+        "cure": "फफूंदनाशक: chlorothalonil, mancozeb, कॉपर-आधारित, azoxystrobin। नम मौसम में बार-बार लगाएं।"
+    },
+    'Tomato_Septoria_leaf_spot': {
+        "severity": "मध्यम", "spread": "कवक (Septoria lycopersici)",
+        "symptoms": "निचली पत्तियों पर गहरे भूरे/स्लेटी केंद्र और पीले प्रभामंडल वाले छोटे गोल धब्बे; पत्ती पीलापन; पत्ती झड़ना।",
+        "prevention": "रोधी किस्में · उचित दूरी · फसल चक्र · खेत स्वच्छता · ड्रिप सिंचाई · मल्चिंग।",
+        "cure": "फफूंदनाशक: chlorothalonil, mancozeb, azoxystrobin, tebuconazole। निचली पत्तियों की छंटाई।"
+    },
+    'Wheat_Brown_rust': {
+        "severity": "उच्च", "spread": "कवक (Puccinia triticina)",
+        "symptoms": "पत्तियों की ऊपरी सतह पर छोटी गोल नारंगी-भूरी फुंसियाँ; आसपास पीलापन; समय से पहले पत्ती मृत्यु; सिकुड़ा अनाज।",
+        "prevention": "रोधी किस्में · फसल चक्र · समय पर बुवाई · संतुलित पोषण।",
+        "cure": "ट्राइजोल: tebuconazole, propiconazole। स्ट्रोबिलुरिन: azoxystrobin। पहले लक्षण पर लगाएं।"
+    },
+    'Wheat_Loose_Smut': {
+        "severity": "उच्च", "spread": "कवक (Ustilago tritici) — बीज-जनित",
+        "symptoms": "बालियों में अनाज की जगह काला पाउडर; अनाज नहीं बनता; पौधे जल्दी पकते दिखते हैं।",
+        "prevention": "प्रमाणित रोगमुक्त बीज · रोधी किस्में · प्रणालीगत फफूंदनाशक से बीज उपचार।",
+        "cure": "बीज उपचार: carboxin (Vitavax), tebuconazole, या triadimenol। गर्म पानी उपचार: 52–54°C पर 10–15 मिनट।"
+    },
+    'Wheat_Yellow_rust': {
+        "severity": "उच्च", "spread": "कवक (Puccinia striiformis)",
+        "symptoms": "पत्ती नसों के साथ लंबी संकरी पीली फुंसी धारियाँ; पत्तियाँ सूख जाती हैं; अनाज का भार कम होता है।",
+        "prevention": "रोधी किस्में · जल्दी बुवाई · ठंडे नम मौसम में नियमित निरीक्षण · फसल चक्र।",
+        "cure": "ट्राइजोल: tebuconazole, propiconazole। स्ट्रोबिलुरिन: azoxystrobin। पहले लक्षण पर लगाएं।"
+    },
+}
+
+SEVERITY_COLORS = {
+    "कोई नहीं":    ("#1b5e20", "#66bb6a", "✅"),
+    "मध्यम":      ("#e65100", "#ffb74d", "⚠️"),
+    "उच्च":       ("#b71c1c", "#ef9a9a", "🔴"),
+    "अति-गंभीर":  ("#4a148c", "#ce93d8", "🚨"),
+}
+
+# ─── Helper functions ─────────────────────────────────────────────────────────
+def get_base64_image(image_path):
+    norm_path = image_path.replace("\\", "/")
+    if not os.path.exists(norm_path):
+        return None
+    with open(norm_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+def model_prediction(test_image):
+    model = load_yolo_model()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        image = Image.open(test_image).convert('RGB')
+        image.save(tmp.name)
+        tmp_path = tmp.name
+    results = model(tmp_path)
+    probs = results[0].probs.data.tolist()
+    top_idx = int(np.argmax(probs))
+    return CLASSES[top_idx], probs[top_idx], probs
+
+def render_confidence_bar(confidence: float):
+    pct   = int(confidence * 100)
+    color = "#66bb6a" if confidence >= 0.7 else "#ffa726" if confidence >= 0.4 else "#ef5350"
+    st.markdown(f"""
+    <div style="margin-bottom:4px;">
+        <span style="color:#a5d6a7;font-size:0.9rem;">विश्वास स्तर: <b style="color:{color};">{pct}%</b></span>
+    </div>
+    <div style="background:#1a3a1a;border-radius:10px;height:18px;width:100%;margin:6px 0 14px;">
+        <div style="background:linear-gradient(90deg,{color},{color}aa);border-radius:10px;height:18px;width:{pct}%;"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def render_disease_card(result: str, confidence: float):
+    info     = DISEASE_INFO_HI.get(result, {})
+    severity = info.get("severity", "अज्ञात")
+    bg, accent, icon = SEVERITY_COLORS.get(severity, ("#1a3a1a", "#4caf50", "ℹ️"))
+    is_healthy = result in HEALTHY_CLASSES
+
+    if is_healthy:
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);border-left:5px solid #66bb6a;
+                    border-radius:12px;padding:20px 24px;margin:12px 0;">
+            <h2 style="color:#a5d6a7;margin:0;">✅ आपकी फसल स्वस्थ है!</h2>
+            <p style="color:#c8e6c9;margin-top:8px;">
+                कोई रोग नहीं पाया गया। फसल की निगरानी जारी रखें और उपज बढ़ाने के लिए
+                हमारे <b>उर्वरक अनुशंसा</b> टूल का उपयोग करें।
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    display_name = result.replace("_", " ").replace(",", ", ")
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,{bg},{bg}cc);border-left:5px solid {accent};
+                border-radius:12px;padding:20px 24px;margin:12px 0;">
+        <h2 style="color:{accent};margin:0;">{icon} {display_name}</h2>
+        <span style="background:{accent}33;color:{accent};padding:3px 10px;border-radius:12px;
+                     font-size:0.8rem;font-weight:600;">गंभीरता: {severity}</span>
+        <span style="background:#1a3a1a;color:#81c784;padding:3px 10px;border-radius:12px;
+                     font-size:0.8rem;margin-left:8px;">{info.get('spread','')}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if info:
+        tab1, tab2, tab3 = st.tabs(["🔍 लक्षण", "🛡️ रोकथाम", "💊 उपचार"])
+        with tab1:
+            st.markdown(f"<p style='color:#c8e6c9;'>{info['symptoms']}</p>", unsafe_allow_html=True)
+        with tab2:
+            for step in info['prevention'].split(' · '):
+                st.markdown(f"- {step}")
+        with tab3:
+            st.markdown(f"<p style='color:#c8e6c9;'>{info['cure']}</p>", unsafe_allow_html=True)
+
+def get_weather_forecast(lat, lon):
+    API_KEY = st.secrets["OPENWEATHER_API_KEY"]
+    URL = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    response = requests.get(URL)
+    if response.status_code == 200:
+        data = response.json()
+        return pd.DataFrame([{
+            'datetime':      datetime.fromtimestamp(f['dt']),
+            'temperature':   f['main']['temp'],
+            'humidity':      f['main']['humidity'],
+            'precipitation': f.get('rain', {}).get('3h', 0),
+            'windspeed':     f['wind']['speed']
+        } for f in data.get('list', [])])
+    st.error("मौसम डेटा प्राप्त करने में विफल।")
+    return pd.DataFrame()
+
+def plot_weather_forecast(forecast_df):
+    fig, axes = plt.subplots(4, 1, figsize=(10, 12))
+    fig.patch.set_facecolor('#0f1a0f')
+    configs = [
+        ('temperature',   'tab:red',    'तापमान (°C)'),
+        ('humidity',      'tab:blue',   'आर्द्रता (%)'),
+        ('precipitation', 'tab:green',  'वर्षा (mm)'),
+        ('windspeed',     'tab:orange', 'हवा की गति (m/s)'),
+    ]
+    for ax, (col, color, label) in zip(axes, configs):
+        ax.set_facecolor('#1a3a1a')
+        ax.plot(forecast_df['datetime'], forecast_df[col], color=color, linewidth=2)
+        ax.fill_between(forecast_df['datetime'], forecast_df[col], alpha=0.15, color=color)
+        ax.set_ylabel(label, color=color, fontsize=10)
+        ax.tick_params(axis='y', labelcolor=color)
+        ax.tick_params(axis='x', colors='#81c784', rotation=30)
+        ax.grid(True, alpha=0.2, color='#4caf50')
+        ax.spines[:].set_color('#2d5a2d')
+        ax.set_title(f"{label} पूर्वानुमान", color='#81c784', fontsize=11, fontweight='bold', pad=6)
+    plt.tight_layout(pad=2.0)
+    st.pyplot(fig)
+
+# ─── Main app ─────────────────────────────────────────────────────────────────
 def Hindi():
-        #functions
-    # Function to automatically get user location based on IP
-    def get_user_location():
-        g = geocoder.ip('me')
-        if g.ok:
-            location = g.latlng  # Get latitude and longitude
-            city = g.city if g.city else "Unknown"  # Safeguard in case of missing city
-            country = g.country if g.country else "Unknown"
-            return location, city, country
-        else:
-            st.warning("Unable to detect location. Using default location coordinates.")
-            return [0, 0], "Unknown", "Unknown"
 
-    # Function to fetch weather forecast from OpenWeatherMap API
-    def get_weather_forecast(lat, lon):
-        API_KEY = '7bd12cbbf7283b1b6d3ae9f67c201bdf'  # Replace with your OpenWeatherMap API key
-        URL = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
-        response = requests.get(URL)
-        if response.status_code == 200:
-            data = response.json()
-            forecast_data = []
-            for forecast in data.get('list', []):  # Use .get() to handle missing 'list'
-                date_time = datetime.fromtimestamp(forecast['dt'])
-                temp = forecast['main']['temp']
-                humidity = forecast['main']['humidity']
-                precipitation = forecast.get('rain', {}).get('3h', 0)
-                windspeed = forecast['wind']['speed']
-                forecast_data.append({
-                    'datetime': date_time,
-                    'temperature': temp,
-                    'humidity': humidity,
-                    'precipitation': precipitation,
-                    'windspeed': windspeed
-                })
-            return pd.DataFrame(forecast_data)
-        else:
-            st.error("Failed to fetch weather data.")
-            return pd.DataFrame()
-
-
-    # Function to plot the weather forecast
-    def plot_weather_forecast(forecast_df):
-        # Create subplots for temperature, humidity, and precipitation
-        fig, (ax1, ax2, ax3,ax4) = plt.subplots(4, 1, figsize=(10, 12))
-        
-        # Plot temperature
-        ax1.plot(forecast_df['datetime'], forecast_df['temperature'], color='tab:red', label='Temperature (°C)')
-        ax1.set_xlabel('Date and Time')
-        ax1.set_ylabel('Temperature (°C)', color='tab:red')
-        ax1.set_title('Temperature Forecast', fontsize=16, fontweight='bold')
-        ax1.tick_params(axis='y', labelcolor='tab:red')
-        ax1.grid(True)
-
-        # Plot humidity
-        ax2.plot(forecast_df['datetime'], forecast_df['humidity'], color='tab:blue', label='Humidity (%)')
-        ax2.set_xlabel('Date and Time')
-        ax2.set_ylabel('Humidity (%)', color='tab:blue')
-        ax2.set_title('Humidity Forecast', fontsize=16, fontweight='bold')
-        ax2.tick_params(axis='y', labelcolor='tab:blue')
-        ax2.grid(True)
-
-        # Plot precipitation
-        ax3.plot(forecast_df['datetime'], forecast_df['precipitation'], color='tab:green', label='Precipitation (mm)')
-        ax3.set_xlabel('Date and Time')
-        ax3.set_ylabel('Precipitation (mm)', color='tab:green')
-        ax3.set_title('Precipitation Forecast', fontsize=16, fontweight='bold')
-        ax3.tick_params(axis='y', labelcolor='tab:green')
-        ax3.grid(True)
-
-        # plot windspeed 
-        ax4.plot(forecast_df['datetime'], forecast_df['windspeed'], color='tab:orange', label='Wind Speed (m/s)')
-        ax4.set_xlabel('Date and Time')
-        ax4.set_ylabel('Wind Speed (m/s)', color='tab:orange')
-        ax4.set_title('Windspeed Forecast', fontsize=16, fontweight='bold')
-        ax4.tick_params(axis='y', labelcolor='tab:orange')
-        ax4.grid(True)
-
-        plt.subplots_adjust(hspace=0.5)
-        st.pyplot(fig)
-
-    # Function to calculate 5-day averages and give precautions
-    def calculate_averages_and_precautions(forecast_df,x):
-        # Filter forecast for the next 5 days
-        forecast_df['date'] = forecast_df['datetime'].dt.date
-        next_days = forecast_df.groupby('date').mean().head(x)
-        
-        # Calculate averages
-        avg_temp = next_days['temperature'].mean()
-        avg_humidity = next_days['humidity'].mean()
-        avg_precipitation = next_days['precipitation'].mean()
-        avg_windspeed = next_days['windspeed'].mean()
-        return avg_temp,avg_humidity,avg_precipitation,avg_windspeed
-
-
-
-    def model_prediction(test_image):
-        global classes
-        classes = [
-            'Apple__Apple_scab', 'Apple_Black_rot', 'Apple_healthy', 'Corn_Blight', 'Corn_Common_Rust',
-            'Corn_Gray_Leaf_Spot', 'Corn_Healthy', 'Cotton_Healthy', 'Cotton_bacterial_blight', 'Cotton_curl_virus',
-            'Grape_Black_rot', 'Grape_Leaf_blight(Isariopsis_Leaf_Spot)', 'Grape__healthy', 
-            'Pepper,_bell_Bacterial_spot', 'Pepper,_bell_healthy', 'Potato_Early_blight', 
-            'Potato_Late_blight', 'Potato_healthy', 'Rice_Healthy', 'Rice_bacterial_leaf_blight', 
-            'Rice_brown_spot', 'Rice_leaf_blast', 'Sugarcan_Mosaic', 'Sugarcane_Healthy', 
-            'Sugarcane_RedRot', 'Sugarcane_Rust', 'Sugarcane_Yellow', 'Tomato_Bacterial_spot', 
-            'Tomato_Early_blight', 'Tomato_Late_blight', 'Tomato_Septoria_leaf_spot', 'Tomato__healthy', 
-            'Wheat_Brown_rust', 'Wheat_Healthy', 'Wheat_Loose_Smut', 'Wheat_Yellow_rust'
-        ]
-
-        model1 = YOLO(r'Models\best.pt')  # Load last custom model
-        
-        # Save the uploaded image to a temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-            # Convert to PIL image for compatibility
-            image = Image.open(test_image)
-            image = image.convert('RGB')  # Ensure 3 channels
-            image.save(tmp_file.name)
-            tmp_image_path = tmp_file.name
-
-        # Perform inference
-        results1 = model1(tmp_image_path)
-        probs1 = results1[0].probs.data.tolist()
-        return classes[np.argmax(probs1)]
-
-    
     with st.sidebar:
-        mode=option_menu(
+        mode = option_menu(
             menu_title=None,
-            options=["🏡होम", "👤 पेज के बारे में","🦠रोग-पहचान","🌥️ 5-दिवसीय पूर्वानुमान", "🌱फसल अनुशंसाकर्ता", "🧪उर्वरक अनुशंसाकर्ता","👥 टीम"]
-                   
+            options=["🏡 होम", "👤 परिचय", "🦠 रोग पहचान",
+                     "🌥️ 5-दिन पूर्वानुमान", "🌱 फसल सुझाव",
+                     "🧪 उर्वरक सुझाव", "👥 टीम"],
+            styles={
+                "container":         {"background-color": "transparent"},
+                "icon":              {"color": "#81c784", "font-size": "16px"},
+                "nav-link":          {"color": "#c8e6c9", "font-size": "14px", "--hover-color": "#2d5a2d"},
+                "nav-link-selected": {"background-color": "#2e7d32", "color": "white"},
+            }
         )
-    # st.sidebar.title("डैशबोर्ड")
-    # mode=st.sidebar.selectbox("पेज चुनें:",["🏡होम", "👤के बारे में","🦠रोग-पहचान","🌥️ 5-दिवसीय पूर्वानुमान", "🌱फसल अनुशंसाकर्ता", "🧪उर्वरक अनुशंसाकर्ता","👥 टीम"])
-
-
-    st.sidebar.markdown("<h1 style='text-align: left; margin-top: 50px;'>  🌾 ग्रीनवॉच</h1>", unsafe_allow_html=True)
-    st.sidebar.markdown("<h6 style='text-align: right;'>- एआई-क्राफ्ट</h6>", unsafe_allow_html=True)
-
-    if mode=="🏡होम":
-       
-        # Title of the app
-        st.markdown("<h1 style='text-align: center;'>🌾 ग्रीनवॉच: एआई फसल स्वास्थ्य सलाहकार</h1>", unsafe_allow_html=True)
-
-        # Introduction and tagline
-        st.write('')
-        st.write('')
-        st.write('')
-        st.write('')
-
-        st.subheader("अपनी फसलों की रक्षा करें, अपनी उपज सुरक्षित करें")
-        st.write("""
-        ग्रीनवॉच एआई में, हम आप जैसे किसानों को फसल की बीमारियों का जल्द पता लगाने और बहुत देर होने से पहले निवारक उपाय करने में मदद करने के लिए कृत्रिम बुद्धिमत्ता की शक्ति का उपयोग करते हैं।
-        """)
-
-        # How It Works section
-        st.header("🌱यह काम किस प्रकार करता है")
-        st.write("""
-        1. एक छवि अपलोड करें: बस बीमारी के लक्षण दिखाने वाली अपनी फसल की एक तस्वीर लें और इसे ऐप पर अपलोड करें।
-        2. एआई विश्लेषण: हमारा उन्नत गहन शिक्षण मॉडल छवि का विश्लेषण करेगा और आपकी फसल को प्रभावित करने वाली संभावित बीमारियों की पहचान करेगा।
-        3. परिणाम और मार्गदर्शन प्राप्त करें: आपको बीमारी के प्रबंधन के लिए विस्तृत सावधानियों और समाधानों के साथ तत्काल निदान प्राप्त होगा।
-        """)
-
-        # Why Use  GreenWatch AI section
-        st.header("🚜 ग्रीनवॉच एआई का उपयोग क्यों करें?")
-        st.write("""
-        - तेज़ और सटीक: अत्याधुनिक एआई तकनीक द्वारा संचालित वास्तविक समय की भविष्यवाणियां प्राप्त करें।
-        - उपयोगकर्ता-अनुकूल: बस एक छवि अपलोड करें, और हमारे AI को बाकी काम करने दें—किसी तकनीकी विशेषज्ञता की आवश्यकता नहीं है।
-        - अनुरूप मार्गदर्शन: न केवल निदान प्राप्त करें बल्कि फसल के नुकसान को रोकने और उपज में सुधार के लिए कार्रवाई योग्य उपाय भी प्राप्त करें।
-        - किसानों का समर्थन: हमारा लक्ष्य किसानों को बेहतर निर्णय लेने और उनकी आजीविका सुरक्षित करने के लिए प्रौद्योगिकी के साथ सशक्त बनाना है।
-        """)
-
-        #How to start
-        st.header("❓ शुरू कैसे करें?")
-        st.write("प्रारंभ करने के लिए साइड पैनल में रोग पहचान टैब पर जाएँ।")
-        # Need Help section
-        st.header("💡 मदद की ज़रूरत है??")
-        st.write("""
-        यदि आप अनिश्चित हैं या अधिक जानकारी चाहते हैं, तो बेझिझक हमारे [एफएक्यू](#) देखें या सीधे हमसे संपर्क करें।
-        """)
-
-
-    
-#About page
-    elif (mode=="👤 पेज के बारे में"):
-        st.header("👤 पेज के बारे में")
-        st.text("")
-        
-        st.markdown('''
-    आपकी फसल रोग भविष्यवाणी और रोकथाम प्रणाली का प्राथमिक लक्ष्य किसानों को एक एआई-संचालित मंच प्रदान करना है जो संभावित बीमारी के प्रकोप का पूर्वानुमान लगा सकता है और उचित निवारक उपाय और उपचार सुझा सकता है। यह प्रणाली कार्रवाई योग्य अंतर्दृष्टि प्रदान करने के लिए फसल छवियों, पर्यावरणीय कारकों (तापमान, आर्द्रता, मिट्टी की नमी), और ऐतिहासिक रोग पैटर्न जैसे वास्तविक समय के डेटा का लाभ उठाती है जो किसानों को उनकी फसलों की रक्षा करने और पैदावार में सुधार करने में मदद कर सकती है।
-
-    ### यह किसानों की कैसे मदद करता है
-
-    1. बीमारी का शीघ्र पता लगाना:
-    प्रणाली छवि विश्लेषण के माध्यम से बीमारियों के शुरुआती लक्षणों की पहचान कर सकती है और किसानों के लिए स्पष्ट होने से पहले लक्षणों के पैटर्न का पता लगा सकती है। शीघ्र हस्तक्षेप से किसानों को समस्या फैलने और महत्वपूर्ण क्षति होने से पहले उसका समाधान करने में मदद मिलती है।.
-    
-    2. डेटा-संचालित निर्णय लेना:
-    - फसलों के प्रकार के साथ तापमान, आर्द्रता और वर्षा जैसी पर्यावरणीय स्थितियों का विश्लेषण करके, प्रणाली भविष्यवाणी कर सकती है कि कब कुछ बीमारियाँ होने की अधिक संभावना है। यह किसानों को उपचार, सिंचाई और यहां तक ​​कि रोपण के समय के बारे में सूचित निर्णय लेने की अनुमति देता है।
-
-    3. फसल हानि को न्यूनतम करना:
-    - संभावित बीमारी के प्रकोप के बारे में प्रारंभिक चेतावनी किसानों को निवारक कार्रवाई करने में सक्षम बनाती है, जिससे फसल के नुकसान को कम किया जा सकता है। रोग-संबंधी फसल क्षति खाद्य उत्पादन के लिए प्रमुख खतरों में से एक है, और समय पर हस्तक्षेप से फसल के महत्वपूर्ण हिस्से को बचाया जा सकता है।
-
-    4. लागत बचत:
-    - सिस्टम केवल आवश्यक होने पर ही विशिष्ट कीटनाशकों या जैविक समाधानों जैसे लक्षित उपचारों की सिफारिश कर सकता है। इससे रसायनों और उर्वरकों के अति प्रयोग को रोका जा सकता है, किसानों का पैसा बचाया जा सकता है और पर्यावरणीय क्षति को कम किया जा सकता है।
-    
-    5. बढ़ी हुई पैदावार:
-    - बीमारियों की रोकथाम और फसलों का अधिक प्रभावी ढंग से प्रबंधन करके, किसानों को अधिक उपज प्राप्त करने की अधिक संभावना है। इससे लाभप्रदता बढ़ती है और बड़े पैमाने पर खाद्य सुरक्षा में योगदान हो सकता है।
-
-    6. वहनीयता:
-    - यह प्रणाली संसाधनों के उपयोग को अनुकूलित करके और अनावश्यक रासायनिक अनुप्रयोगों को कम करके टिकाऊ कृषि पद्धतियों को प्रोत्साहित करती है। एआई का उपयोग करके, सिस्टम उपलब्ध सबसे पर्यावरण अनुकूल विकल्पों का सुझाव दे सकता है|
-
-
-    एआई-संचालित विश्लेषण को वास्तविक समय के डेटा के साथ एकीकृत करके, किसानों के पास अपनी फसलों की सुरक्षा करने और अपनी कृषि पद्धतियों को अनुकूलित करने का एक अभिनव तरीका होगा, जिससे कृषि अधिक उत्पादक और टिकाऊ हो जाएगी।
-                
-                    ''')
-        st.write("")
-        st.write("")
-        
-        st.markdown('''
-    ### फसल रोग भविष्यवक्ता के बारे में:
-    \n\n
-    हमारी परियोजना फसल रोगों की भविष्यवाणी करने के लिए मशीन लर्निंग का लाभ उठाती है, जिससे किसानों को अपनी उपज की रक्षा के लिए सक्रिय निर्णय लेने में मदद मिलती है। फसल की छवियों और मौसम के पूर्वानुमान जैसे स्रोतों से डेटा का विश्लेषण करके, हमारा मॉडल उन पैटर्न की पहचान करता है जो संभावित रोग प्रकोपों ​​का संकेत देते हैं।
-इस शुरुआती पहचान से समय पर हस्तक्षेप करने, फसल के नुकसान को कम करने और टिकाऊ कृषि को बढ़ावा देने में मदद मिलती है। हमारा समाधान उपयोग में आसान प्लेटफ़ॉर्म के साथ एकीकृत होता है, जिससे किसानों को फसल के स्वास्थ्य और उत्पादकता को बढ़ाने के लिए कार्रवाई योग्य जानकारी मिलती है।''')
-                
-        
-        st.markdown('''
-    ### फसल अनुशंसा प्रणाली के बारे में:
-    \n\n
-    हमारी फसल अनुशंसा प्रणाली मिट्टी के गुणों, जलवायु स्थितियों के आधार पर किसानों को उगाने के लिए सर्वोत्तम फसलों का सुझाव देने के लिए मशीन लर्निंग का उपयोग करती है। इन कारकों का विश्लेषण करके, यह प्रणाली किसानों को ऐसी फसलें चुनने में मदद करती है जो उनकी विशिष्ट परिस्थितियों में पनपने की सबसे अधिक संभावना है, जिससे उपज क्षमता, संसाधन उपयोग और समग्र कृषि उत्पादकता का अनुकूलन होता है। यह तकनीक पर्यावरण की उपयुक्तता के साथ फसल विकल्पों को संरेखित करके टिकाऊ कृषि का समर्थन करती है।''')
-
-        st.markdown('''
-    ### उर्वरक अनुशंसा प्रणाली के बारे में:
-    \n\n
-    हमारी उर्वरक अनुशंसा प्रणाली फसल के प्रकार, मिट्टी की संरचना और पर्यावरण की स्थितियों के आधार पर इष्टतम उर्वरक प्रकार और मात्रा का सुझाव देने के लिए मशीन लर्निंग का उपयोग करती है। इन कारकों का विश्लेषण करके, सिस्टम अनुकूलित सिफारिशें प्रदान करता है जो फसल के स्वास्थ्य को बेहतर बनाते हैं और उपज को अधिकतम करते हैं, जबकि अपशिष्ट और पर्यावरणीय प्रभाव को कम करते हैं। यह दृष्टिकोण कुशल पोषक तत्व प्रबंधन को बढ़ावा देता है, टिकाऊ खेती प्रथाओं का समर्थन करता है।''')
-
-        st.markdown('''
-    ### मौसम पूर्वानुमान प्रणाली के बारे में:
-    \n\n
-    हमारी मौसम पूर्वानुमान प्रणाली फसल की वृद्धि को प्रभावित करने वाले मौसम पैटर्न और स्थितियों की भविष्यवाणी करने के लिए उन्नत मशीन लर्निंग एल्गोरिदम का उपयोग करती है। वास्तविक समय के अवलोकनों और जलवायु मॉडल द्वारा, यह तापमान, वर्षा, आर्द्रता और अन्य प्रमुख कारकों के लिए सटीक पूर्वानुमान प्रदान करता है। ये पूर्वानुमान किसानों को रोपण, सिंचाई और कीट प्रबंधन पर सूचित निर्णय लेने में मदद करते हैं, अंततः फसल की उपज को अनुकूलित करते हैं और प्रतिकूल मौसम की घटनाओं से जोखिम को कम करते हैं।''')
-
-        st.markdown('''
-    ## प्रयुक्त उपकरण और प्रौद्योगिकियां:
-    \n\n
-    1.फ्रंटएंड -->स्ट्रीमलिट\n
-    2.बैकएंड -->मशीन लर्निंग मॉडल और एल्गोरिदम \n
-    3.मशीन मॉडल और एल्गोरिदम --सीएनएन, एसवीएम, नैवे-बेयस, योलो, ट्रांसफर लर्निंग।\n
-                    
-    ## हमने यह कैसे किया?
-    हमने विभिन्न पौधों के लिए फसल रोग की भविष्यवाणी के लिए CNN आर्किटेक्चर का उपयोग किया, इसके साथ ही हमने अपने मॉडल के लिए बेहतरी के लिए ट्रांसफर लर्निंग का उपयोग किया और अंत में चरम रूप तक पहुँचने के लिए YOLO को लागू किया। फसल संस्तुतिकर्ता और उर्वरक संस्तुतिकर्ता की भविष्यवाणी करने में क्रमशः नैवे-बेयस और एसवीएम का उपयोग किया गया।
-
-   हमने फ्रंट-एंड में क्या किया?\n
-->फसल-रोग पूर्वानुमानकर्ता\n
-->मौसम पूर्वानुमान और स्थान डिटेक्टर\n
-->फसल-अनुशंसक\n
-->उर्वरक-अनुशंसक
-''')
-
-
-    #team page
-    elif mode=="👥 टीम":
-        # Function to convert image to base64 encoding
-        def get_base64_image(image_path):
-            with open(image_path, "rb") as file:
-                data= file.read()
-                return base64.b64encode(data).decode()
-
-        # Teams Tab content
-        st.title("टीम से मिलो:  ऐ-शिल्प")
-        st.write("")
-        st.write("")
-        st.write("")
+        st.markdown("<hr style='border-color:#2d5a2d;margin:20px 0;'>", unsafe_allow_html=True)
         st.markdown("""
-        ग्रीनवॉच एआई एक अत्याधुनिक समाधान है जिसे एआई-संचालित फसल रोग का पता लगाने, मौसम-आधारित भविष्यवाणियों और फसल स्वास्थ्य और उपज बढ़ाने के लिए अनुरूप सिफारिशों के साथ किसानों की सहायता के लिए डिज़ाइन किया गया है। हमारी टीम उन्नत प्रौद्योगिकी और टिकाऊ प्रथाओं के साथ कृषि को सशक्त बनाने के लिए समर्पित है.
+        <div style='text-align:center;padding:10px;'>
+            <h2 style='color:#66bb6a;margin:0;'>🌾 GreenWatch</h2>
+            <p style='color:#81c784;font-size:0.8rem;margin:4px 0;'>AI कृषि स्वास्थ्य सलाहकार</p>
+            <p style='color:#4caf50;font-size:0.75rem;'>by AI-Craft</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-                    
+        if mode == "🦠 रोग पहचान":
+            st.markdown("<hr style='border-color:#2d5a2d;'>", unsafe_allow_html=True)
+            st.markdown("<p style='color:#81c784;font-weight:600;'>🌿 नमूना छवि आज़माएं</p>", unsafe_allow_html=True)
+            sample_choice = st.selectbox("नमूना चुनें:", list(SAMPLE_IMAGES.keys()), label_visibility="collapsed")
+            if st.button("नमूना लोड करें"):
+                sample_path = SAMPLE_IMAGES[sample_choice]
+                if os.path.exists(sample_path):
+                    st.session_state['sample_image_hi'] = sample_path
+                    st.session_state['sample_name_hi']  = sample_choice
+                else:
+                    st.warning("नमूना छवि उपलब्ध नहीं है।")
 
-        नीचे अद्भुत टीम के सदस्य हैं जिन्होंने इस परियोजना की सफलता में योगदान दिया:
+    # ── होम ───────────────────────────────────────────────────────────────────
+    if mode == "🏡 होम":
+        st.markdown("<h1 style='text-align:center;'>🌾 GreenWatch: AI कृषि स्वास्थ्य सलाहकार</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align:center;color:#81c784;font-size:1.1rem;'>अपनी फसल की रक्षा करें। अपनी उपज सुरक्षित करें।</p>", unsafe_allow_html=True)
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown('<div class="metric-card"><h3>36</h3><p>रोग वर्ग</p></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown('<div class="metric-card"><h3>10+</h3><p>फसल प्रकार</p></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown('<div class="metric-card"><h3>98%+</h3><p>मॉडल सटीकता</p></div>', unsafe_allow_html=True)
+        with col4:
+            st.markdown('<div class="metric-card"><h3>2</h3><p>भाषाएं</p></div>', unsafe_allow_html=True)
+
+        st.markdown("### 🌱 यह कैसे काम करता है")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("**📤 1. छवि अपलोड करें**\n\nअपनी फसल की बीमार पत्ती की फोटो लें और अपलोड करें।")
+        with c2:
+            st.markdown("**🧠 2. AI विश्लेषण**\n\nहमारा YOLOv8 मॉडल छवि का विश्लेषण करके रोग की पहचान करता है।")
+        with c3:
+            st.markdown("**📋 3. मार्गदर्शन पाएं**\n\nलक्षण, रोकथाम और उपचार के साथ तत्काल निदान पाएं।")
+
+        st.markdown("### 🌾 समर्थित फसलें")
+        crops = ["🍎 सेब", "🌽 मक्का", "🧶 कपास", "🍇 अंगूर",
+                 "🫑 शिमला मिर्च", "🥔 आलू", "🌾 चावल", "🎋 गन्ना",
+                 "🍅 टमाटर", "🌾 गेहूं"]
+        cols = st.columns(5)
+        for i, crop in enumerate(crops):
+            cols[i % 5].markdown(
+                f"<div style='background:#1e3a1e;border-radius:8px;padding:8px;"
+                f"text-align:center;margin:4px;color:#c8e6c9;'>{crop}</div>",
+                unsafe_allow_html=True
+            )
+
+    # ── परिचय ────────────────────────────────────────────────────────────────
+    elif mode == "👤 परिचय":
+        st.markdown("## 👤 GreenWatch AI के बारे में")
+        st.markdown("""
+GreenWatch AI एक AI-संचालित कृषि मंच है जो एकल सुलभ टूल में फसल रोग पहचान,
+मौसम पूर्वानुमान, फसल अनुशंसा और उर्वरक अनुशंसा को जोड़ता है।
+
+**निर्मित: ** YOLOv8 · MobileNetV2 · Custom CNN · Naive Bayes · SVM · Streamlit · OpenWeatherMap API
+
+**मॉडल पाइपलाइन:** कच्ची छवि → YOLOv8n-cls → 36-वर्ग softmax → रोग + विश्वास स्तर + कार्रवाई योग्य मार्गदर्शन
         """)
+        tab1, tab2, tab3, tab4 = st.tabs(["🦠 रोग डिटेक्टर", "🌱 फसल सुझाव", "🧪 उर्वरक सुझाव", "🌥️ मौसम पूर्वानुमान"])
+        with tab1:
+            st.markdown("कस्टम CNN, फिर MobileNetV2 ट्रांसफर लर्निंग, फिर अंतिम तैनाती के लिए YOLOv8n-cls प्रशिक्षित किया। YOLO ने 10 फसल प्रकारों के 36 रोग वर्गों में सर्वश्रेष्ठ सटीकता प्राप्त की।")
+        with tab2:
+            st.markdown("मिट्टी NPK, तापमान, आर्द्रता, pH और वर्षा पर प्रशिक्षित Naive Bayes वर्गीकरणकर्ता सर्वोत्तम फसल की सिफारिश करता है।")
+        with tab3:
+            st.markdown("फसल प्रकार, मिट्टी प्रकार, मिट्टी NPK, तापमान, आर्द्रता और नमी पर प्रशिक्षित SVM मॉडल इष्टतम उर्वरक की सिफारिश करता है।")
+        with tab4:
+            st.markdown("OpenWeatherMap API का उपयोग करके लाइव 5-दिन मौसम पूर्वानुमान और तापमान, आर्द्रता, वर्षा और हवा पर आधारित कृषि सावधानियां।")
 
-        # Create a layout with columns for displaying team photos
-        st.write("")
+    # ── रोग पहचान ────────────────────────────────────────────────────────────
+    elif mode == "🦠 रोग पहचान":
+        st.markdown("## 🦠 फसल रोग पहचान")
+        st.markdown("रोगों को तुरंत पहचानने के लिए अपनी फसल की पत्ती की स्पष्ट छवि अपलोड करें।")
 
-        # Add a section for team members with photos
+        uploaded_image = st.file_uploader(
+            "एक छवि चुनें (JPG, JPEG, PNG)",
+            type=["jpg", "jpeg", "png"],
+            help="सर्वोत्तम परिणाम के लिए: अच्छी रोशनी, प्रभावित पत्ती के करीब से, स्पष्ट फोकस में"
+        )
+
+        active_image = uploaded_image
+        if not active_image and 'sample_image_hi' in st.session_state:
+            active_image = st.session_state['sample_image_hi']
+            st.info(f"नमूना उपयोग हो रहा है: **{st.session_state.get('sample_name_hi', '')}**")
+
+        if active_image is not None:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.markdown("**📷 अपलोड की गई छवि**")
+                if isinstance(active_image, str):
+                    st.image(active_image, use_column_width=True)
+                else:
+                    st.image(active_image, use_column_width=True)
+            with col2:
+                st.markdown("**🔬 विश्लेषण**")
+                if st.button("🔍 रोग पहचानें", use_container_width=True):
+                    with st.spinner("फसल छवि का विश्लेषण किया जा रहा है..."):
+                        result, confidence, all_probs = model_prediction(active_image)
+
+                    render_confidence_bar(confidence)
+
+                    if confidence < 0.4:
+                        st.warning("⚠️ कम विश्वास स्तर — स्पष्ट, करीबी, अच्छी रोशनी वाली छवि आज़माएं।")
+
+                    render_disease_card(result, confidence)
+
+                    st.markdown("**📊 शीर्ष 3 पूर्वानुमान**")
+                    top3_idx = np.argsort(all_probs)[::-1][:3]
+                    for idx in top3_idx:
+                        name = CLASSES[idx].replace("_", " ")
+                        pct  = int(all_probs[idx] * 100)
+                        bar_color = "#66bb6a" if idx == top3_idx[0] else "#4a6741"
+                        st.markdown(f"""
+                        <div style="margin:4px 0;">
+                            <span style="color:#c8e6c9;font-size:0.85rem;">{name}</span>
+                            <div style="background:#1a3a1a;border-radius:6px;height:12px;margin-top:2px;">
+                                <div style="background:{bar_color};border-radius:6px;height:12px;width:{pct}%;"></div>
+                            </div>
+                            <span style="color:#81c784;font-size:0.8rem;">{pct}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:#1a3a1a;border:2px dashed #4caf50;border-radius:12px;
+                        padding:40px;text-align:center;">
+                <h3 style="color:#66bb6a;">📷 शुरू करने के लिए फसल की छवि अपलोड करें</h3>
+                <p style="color:#81c784;">या साइडबार से नमूना छवि चुनें →</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ── 5-दिन पूर्वानुमान ────────────────────────────────────────────────────
+    elif mode == "🌥️ 5-दिन पूर्वानुमान":
+        st.markdown("## 🌥️ मौसम पूर्वानुमान और फसल सावधानियां")
+
+        city_input = st.text_input("🌍 अपने शहर का नाम दर्ज करें", value="नई दिल्ली", key="city_input_hindi")
+
+        if st.button("मौसम पूर्वानुमान प्राप्त करें", key="weather_btn_hindi"):
+            with st.spinner("मौसम डेटा प्राप्त किया जा रहा है..."):
+                g = geocoder.arcgis(city_input)
+            if g.ok:
+                lat, lng = g.lat, g.lng
+                st.success(f"📍 **{city_input}** (अक्षांश: {round(lat,4)}, देशांतर: {round(lng,4)})")
+
+                forecast_df = get_weather_forecast(lat, lng)
+                if not forecast_df.empty:
+                    plot_weather_forecast(forecast_df)
+
+                    forecast_df['date'] = forecast_df['datetime'].dt.date
+                    avgs      = forecast_df.groupby('date').mean().head(5)
+                    avg_temp  = avgs['temperature'].mean()
+                    avg_hum   = avgs['humidity'].mean()
+                    avg_prec  = avgs['precipitation'].mean()
+                    avg_wind  = avgs['windspeed'].mean()
+
+                    st.markdown("### 📊 5-दिन औसत")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("🌡️ औसत तापमान", f"{avg_temp:.1f}°C")
+                    c2.metric("💧 औसत आर्द्रता", f"{avg_hum:.1f}%")
+                    c3.metric("🌧️ औसत वर्षा",   f"{avg_prec:.2f} mm")
+                    c4.metric("💨 औसत हवा",      f"{avg_wind:.1f} m/s")
+
+                    st.markdown("### ⚠️ फसल सावधानियां")
+                    precautions = []
+                    if avg_temp > 35:
+                        precautions.append("🌡️ **उच्च तापमान** — गर्मी के तनाव से बचाने के लिए फसलों की सिंचाई करें।")
+                    elif avg_temp < 15:
+                        precautions.append("❄️ **कम तापमान** — ठंड से नुकसान से बचाने के लिए संवेदनशील फसलों को ढकें।")
+                    if avg_hum > 80:
+                        precautions.append("💧 **उच्च आर्द्रता** — फफूंद रोगों (फफूंदी, रस्ट) के लिए निगरानी करें।")
+                    if avg_prec > 5:
+                        precautions.append("🌧️ **भारी वर्षा** — जलभराव और जड़ सड़न से बचाने के लिए जल निकासी सुनिश्चित करें।")
+                    elif avg_prec == 0:
+                        precautions.append("☀️ **कोई वर्षा नहीं** — मिट्टी की नमी बनाए रखने के लिए सिंचाई करें।")
+                    if avg_wind > 15:
+                        precautions.append("💨 **तेज हवाएं** — ढीले पौधों को सुरक्षित करें और भौतिक क्षति की जांच करें।")
+                    if not precautions:
+                        precautions.append("✅ **स्थितियां अनुकूल लगती हैं** — नियमित निगरानी जारी रखें।")
+
+                    for p in precautions:
+                        st.markdown(f"- {p}")
+            else:
+                st.error("शहर नहीं मिला। कृपया वर्तनी जांचें और पुनः प्रयास करें।")
+
+    # ── फसल सुझाव ────────────────────────────────────────────────────────────
+    elif mode == "🌱 फसल सुझाव":
+        st.markdown("## 🌱 फसल अनुशंसा")
+        st.markdown("अपनी मिट्टी और जलवायु विवरण दर्ज करें ताकि आपकी परिस्थितियों के लिए सबसे अच्छी फसल खोजी जा सके।")
+
+        with st.form("crop_form_hi"):
+            col1, col2 = st.columns(2)
+            with col1:
+                N_input        = st.number_input("मिट्टी में नाइट्रोजन (%)", min_value=0, max_value=200, value=50)
+                P_input        = st.number_input("मिट्टी में फॉस्फोरस (%)", min_value=0, max_value=200, value=50)
+                K_input        = st.number_input("मिट्टी में पोटेशियम (%)", min_value=0, max_value=200, value=50)
+                temp_input     = st.number_input("तापमान (°C)", min_value=-10.0, max_value=60.0, value=25.0)
+            with col2:
+                humid_input    = st.number_input("आर्द्रता (%)", min_value=0.0, max_value=100.0, value=60.0)
+                ph_input       = st.number_input("मिट्टी का pH", min_value=0.0, max_value=14.0, value=6.5)
+                rainfall_input = st.number_input("वार्षिक वर्षा (mm)", min_value=0.0, max_value=5000.0, value=200.0)
+            submit = st.form_submit_button("🌾 फसल की सिफारिश करें", use_container_width=True)
+
+        if submit:
+            try:
+                model      = load_crop_model()
+                features   = np.array([[N_input, P_input, K_input, temp_input, humid_input, ph_input, rainfall_input]])
+                prediction = model.predict(features)
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);border-left:5px solid #66bb6a;
+                            border-radius:12px;padding:20px 24px;margin:12px 0;text-align:center;">
+                    <h2 style="color:#a5d6a7;">🌾 अनुशंसित फसल</h2>
+                    <h1 style="color:#66bb6a;font-size:2.5rem;">{prediction[0].upper()}</h1>
+                    <p style="color:#c8e6c9;">आपकी मिट्टी और जलवायु परिस्थितियों के लिए सबसे उपयुक्त।</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("**समर्थित फसलें:** सेब, केला, चावल, अनार, अरहर, पपीता, संतरा, खरबूज, मूंग, मोठ, आम, मक्का, मसूर, राजमा, जूट, अंगूर, कपास, कॉफी, नारियल, चना, उड़द, तरबूज")
+            except Exception as e:
+                st.error(f"पूर्वानुमान त्रुटि: {e}")
+
+    # ── उर्वरक सुझाव ─────────────────────────────────────────────────────────
+    elif mode == "🧪 उर्वरक सुझाव":
+        st.markdown("## 🧪 उर्वरक अनुशंसा")
+        st.markdown("अपने निकटतम मृदा परीक्षण केंद्र पर मिट्टी की जांच करवाएं और नीचे विवरण भरें।")
+
+        crop_mapping = {
+            'चावल':0,'गेहूं':1,'तंबाकू':2,'गन्ना':3,'दालें':4,'अनार':5,
+            'धान':6,'तेल बीज':7,'बाजरा':8,'मक्का':9,'मूंगफली':10,
+            'कपास':11,'कॉफी':12,'तरबूज':13,'जौ':14,'राजमा':15,'संतरा':16
+        }
+        crop_mapping_en = {
+            'चावल':'rice','गेहूं':'Wheat','तंबाकू':'Tobacco','गन्ना':'Sugarcane',
+            'दालें':'Pulses','अनार':'pomegranate','धान':'Paddy','तेल बीज':'Oil seeds',
+            'बाजरा':'Millets','मक्का':'Maize','मूंगफली':'Ground Nuts','कपास':'Cotton',
+            'कॉफी':'coffee','तरबूज':'watermelon','जौ':'Barley','राजमा':'kidneybeans','संतरा':'orange'
+        }
+        crop_mapping_idx = {
+            'rice':0,'Wheat':1,'Tobacco':2,'Sugarcane':3,'Pulses':4,'pomegranate':5,
+            'Paddy':6,'Oil seeds':7,'Millets':8,'Maize':9,'Ground Nuts':10,
+            'Cotton':11,'coffee':12,'watermelon':13,'Barley':14,'kidneybeans':15,'orange':16
+        }
+        soil_mapping    = {'चिकनी मिट्टी':0,'दोमट':1,'लाल':2,'काली':3,'बलुई':4}
+        soil_mapping_en = {'चिकनी मिट्टी':'Clayey','दोमट':'Loamy','लाल':'Red','काली':'Black','बलुई':'Sandy'}
+        soil_mapping_idx = {'Clayey':0,'Loamy':1,'Red':2,'Black':3,'Sandy':4}
+
+        with st.form("fert_form_hi"):
+            col1, col2 = st.columns(2)
+            with col1:
+                temp_input  = st.number_input("तापमान (°C)",         min_value=0, max_value=60,  value=25)
+                humid_input = st.number_input("आर्द्रता (%)",         min_value=0, max_value=100, value=60)
+                moist_input = st.number_input("मिट्टी की नमी (%)",   min_value=0, max_value=100, value=40)
+                soil_input  = st.selectbox("मिट्टी का प्रकार", list(soil_mapping.keys()))
+            with col2:
+                crop_input  = st.selectbox("फसल का प्रकार", list(crop_mapping_en.keys()))
+                N_input     = st.number_input("नाइट्रोजन (N)",        min_value=0, max_value=200, value=40)
+                P_input     = st.number_input("फॉस्फोरस (P)",         min_value=0, max_value=200, value=40)
+                K_input     = st.number_input("पोटेशियम (K)",         min_value=0, max_value=200, value=40)
+            submit = st.form_submit_button("🧪 उर्वरक की सिफारिश करें", use_container_width=True)
+
+        if submit:
+            try:
+                model      = load_fertilizer_model()
+                soil_en    = soil_mapping_en[soil_input]
+                crop_en    = crop_mapping_en[crop_input]
+                data       = np.array([temp_input, humid_input, moist_input,
+                                       soil_mapping_idx[soil_en], crop_mapping_idx[crop_en],
+                                       N_input, K_input, P_input])
+                prediction = model.predict([data])
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);border-left:5px solid #66bb6a;
+                            border-radius:12px;padding:20px 24px;margin:12px 0;text-align:center;">
+                    <h2 style="color:#a5d6a7;">🧪 अनुशंसित उर्वरक</h2>
+                    <h1 style="color:#66bb6a;font-size:2.5rem;">{prediction[0].upper()}</h1>
+                    <p style="color:#c8e6c9;">आपकी फसल और मिट्टी की परिस्थितियों के लिए इष्टतम।</p>
+                </div>
+                """, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"पूर्वानुमान त्रुटि: {e}")
+
+    # ── टीम ──────────────────────────────────────────────────────────────────
+    elif mode == "👥 टीम":
+        st.markdown("## 👥 टीम से मिलें — AI-Craft")
+        st.markdown("GreenWatch AI को JNU के CSE छात्रों की एक टीम ने एक पूर्ण-स्टैक AI कृषि परियोजना के रूप में बनाया।")
+        st.markdown("<hr>", unsafe_allow_html=True)
+
         team_members = [
-            {"नाम": "कृष्णा वामसी के", "नामांकन संख्या:": "23/11/EC/002", "image_path": "team\krishna.jpg"},
-            {"नाम": "एम.प्रदीप", "नामांकन संख्या:": "23/11/EC/063", "image_path": "team\pradeep.jpg"},
-            {"नाम": "ए.संपत देव", "नामांकन संख्या:": "23/11/EC/029", "image_path": "team\sampath.jpg"},
-            {"नाम": "विग्नेश थंगाबलन बी", "नामांकन संख्या:": "23/11/EC/020", "image_path": r"team\vignesh.jpg"},
-            {"नाम": "एम. जय राम चंद्र", "नामांकन संख्या:": "23/11/EC/071", "image_path": "team\jairam.jpg"}
+            {"name": "Krishna Vamsy K",      "roll": "23/11/EC/002", "role": "ML लीड और फुल स्टैक",   "image_path": "team/krishna.jpg"},
+            {"name": "M. Pradeep",            "roll": "23/11/EC/063", "role": "ML इंजीनियर",           "image_path": "team/pradeep.jpg"},
+            {"name": "A. Sampath Dev",        "roll": "23/11/EC/029", "role": "बैकएंड और डेटा",        "image_path": "team/sampath.jpg"},
+            {"name": "Vignesh Thangabalan B", "roll": "23/11/EC/020", "role": "फ्रंटएंड और UI",        "image_path": "team/vignesh.jpg"},
+            {"name": "M. Jai Ram Chandra",    "roll": "23/11/EC/071", "role": "मॉडल प्रशिक्षण और QA", "image_path": "team/jairam.jpg"},
         ]
 
         for member in team_members:
-            # Create a two-column layout
-            col1, col2 = st.columns([1, 4])  # Adjust the column width as needed
+            col1, col2 = st.columns([1, 4])
             with col1:
-                # Convert the image to base64 for displaying in HTML
-                try:
-                    img_base64 = get_base64_image(member["image_path"])
-                    st.markdown(
-                        f"""
-                        <div style="
-                            border: 2px solid #ccc;
-                            border-radius: 10px;
-                            padding: 5px;
-                            display: inline-block;
-                            text-align: center;
-                            max-width: 150px;">
-                            <img src="data:image/jpg;base64,{img_base64}" style="max-width: 100%; border-radius: 10px;">
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                except FileNotFoundError:
-                    st.warning(f"{member['नाम']}का छवि नहीं मिली.")
+                img_b64 = get_base64_image(member["image_path"])
+                if img_b64:
+                    st.markdown(f"""
+                    <div style="border:2px solid #4caf50;border-radius:12px;padding:5px;
+                                display:inline-block;text-align:center;max-width:120px;">
+                        <img src="data:image/jpg;base64,{img_b64}"
+                             style="max-width:100%;border-radius:8px;">
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="background:#1e3a1e;border:2px solid #4caf50;border-radius:12px;
+                                width:100px;height:100px;display:flex;align-items:center;
+                                justify-content:center;font-size:2rem;">👤</div>
+                    """, unsafe_allow_html=True)
             with col2:
-                st.subheader(member["नाम"])
-                st.write(f"नामांकन संख्या:: {member['नामांकन संख्या:']}")
-                st.write("")
-                st.write("")
-                st.write("")
-                st.write("")
-                st.write("")
+                st.markdown(f"**{member['name']}**")
+                st.markdown(f"<span style='color:#81c784;'>{member['role']}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color:#a5d6a7;font-size:0.85rem;'>रोल नंबर: {member['roll']}</span>", unsafe_allow_html=True)
+            st.markdown("<hr style='border-color:#1e3a1e;margin:8px 0;'>", unsafe_allow_html=True)
 
-        #ferilizer recommend page
-
-    elif mode=="🧪उर्वरक अनुशंसाकर्ता":
-        st.title('🧪उर्वरक अनुशंसाकर्ता')
-        st.write('')
-        st.write('')
-        st.write("")
-        st.write("क्या आप इस बात को लेकर असमंजस में हैं कि कौन सी फसल उगाएं?")
-        st.write("अपनी उलझन का समाधान पाने के लिए निम्नलिखित विवरण भरें।")
-        st.write("")
-
-        
-        # Create two columns for the form inputs
-        col1, col2 = st.columns([1, 1])  # This will give both columns equal width
-        
-        crop_mapping = {
-        'चावल': 0,
-        'गेहूँ': 1,
-        'तंबाकू': 2,
-        'गन्ना': 3,
-        'दालें': 4,
-        'अनार': 5,
-        'धान का खेत': 6,
-        'तिलहन': 7,
-        'बाजरा': 8,
-        'मक्का': 9,
-        'मूंगफली': 10,
-        'कपास': 11,
-        'कॉफी': 12,
-        'तरबूज': 13,
-        'जौ': 14,
-        'राजमा': 15,
-        'नारंगी': 16
-        }
-        soil_mapping = {
-        'चिकनी मिट्टी': 0,
-        'बलुई मिट्टी': 1,
-        'लाल मिट्टी': 2,
-        'काली मिट्टी':3,
-        'रेत भरी मिट्टी':4
-
-            }
-        
-        with st.form("User_details"):
-            with col1:
-                temp_input = st.text_input("तापमान दर्ज करें (सेल्सियस):")
-                humid_input = st.text_input("आर्द्रता दर्ज करें:")
-                moist_input = st.text_input("मिट्टी में नमी डालें:")
-                soil_input = st.selectbox("मिट्टी का प्रकार चुनें:", soil_mapping.keys())
-            with col2:
-                crop_input = st.selectbox("फसल का प्रकार चुनें:",crop_mapping.keys())
-                N_input = st.text_input("मिट्टी में नाइट्रोजन (एन) सामग्री दर्ज करें:")
-                P_input = st.text_input("फॉस्फोरस (पी) सामग्री दर्ज करें:")
-                K_input = st.text_input("पोटेशियम(K) सामग्री दर्ज करें:")
-
-            submit_button = st.form_submit_button("जमा करना")
-
-        # Actions after form submission
-        if submit_button:
-            try:
-                # Preprocess inputs (convert text inputs to numeric values)
-                temp = int(temp_input)
-                humid = int(humid_input)
-                moist=int(moist_input)
-                N_input=int(N_input)
-                P_input=int(P_input)
-                K_input=int(K_input)
-
-        
-                # Load the model (ensure the path to the model is correct)
-                model = joblib.load('Models\svm_model.pkl_2')
-
-                #input array to model
-                data=np.array([temp,humid,moist,soil_mapping[soil_input],crop_mapping[crop_input],N_input,K_input,P_input])
-                prediction=model.predict([data])   # Make prediction
-                
-
-                # Display the prediction or any relevant output
-                st.success(f'आपकी फसल के लिए अनुमानित उपयुक्त उर्वरक: {prediction[0]}')
-                st.write("")
-                st.write(f"{str.upper(prediction[0])}** आपके मौसम और मिट्टी की स्थिति के अनुसार बोई जाने वाली संभावित फसल है.")
-                st.write("")
-                st.subheader("कृपया यह भी देखें कि हम केवल किसी भी परिस्थिति में इन फसलों के लिए भविष्यवाणी करते हैं:")
-                st.write("")
-                st.write("सेब, केला, चावल, अनार, अरहर, पपीता, संतरा, खरबूजा, मूंग, मोथबीन,")
-                st.write("आम, मक्का, मसूर, राजमा, जूट, अंगूर, कपास, कॉफी, नारियल, चना, उड़द, तरबूज")
-
-
-
-            except ValueError as e:
-                st.error(f"इनपुट रूपांतरण में त्रुटि: {e}")
-            except Exception as e:
-                st.error(f"एक अप्रत्याशित त्रुटि हुई: {e}")
-
-    
-    
-    
-    # 5-day weather predictiong and precaution page---------------------------------------------------------
-
-
-
-
-    elif mode == "🌥️ 5-दिवसीय पूर्वानुमान":
-        st.title('मौसम पूर्वानुमान और फसल संबंधी सावधानियाँ')
-        st.write('')
-        st.write('')
-
-        # Show loading spinner while detecting location
-        with st.spinner("आपके स्थान का पता लगाया जा रहा है..."):
-            location, city, country = get_user_location()
-            time.sleep(2)  # Optional: simulate loading delay for demonstration purposes
-
-        # Get user location
-        location, city, country = get_user_location()
-        
-        if location:
-            st.success(f"स्थान का पता चला: {city}, {country} (अक्षांश: {location[0]}, देशान्तर: {location[1]})")
-            st.write('')
-            st.write('')
-            # Fetch and display weather forecast
-            forecast_df = get_weather_forecast(location[0], location[1])
-            plot_weather_forecast(forecast_df)
-        
-            # Calculate averages and give precautions
-            st.write('')  # Adding space for better readability
-            st.write('')
-            avg_temp,avg_humidity,avg_precipitation,avg_windspeed=calculate_averages_and_precautions(forecast_df,5)
-            # Display average values
-            st.subheader('5-दिवसीय औसत मौसम पूर्वानुमान')
-            st.write('')
-            st.write(f"औसत तापमान: {avg_temp:.2f}°C")
-            st.write(f"औसत आर्द्रता: {avg_humidity:.2f}%")
-            st.write(f"औसत वर्षा: {avg_precipitation:.2f} mm")
-            st.write(f"औसत हवा की गति: {avg_windspeed:.2f} m/s") 
-            st.write('')
-            
-            # Display crop precautions based on averages
-            st.subheader('अनुशंसित सावधानियां')
-            st.write('')
-            if avg_temp > 35:
-                st.write("⚠ एहतियात: उच्च औसत तापमान। गर्मी के तनाव से बचने के लिए फसलों की सिंचाई करने पर विचार करें.")
-            elif avg_temp < 15:
-                st.write("⚠ सावधानी: कम औसत तापमान। संवेदनशील फसलों को ठंड से होने वाले नुकसान से बचाने के लिए उन्हें ढकें.")
-            
-            if avg_humidity > 80:
-                st.write("⚠ सावधानी: उच्च आर्द्रता। फफूंदी और जंग जैसी फंगल बीमारियों की निगरानी करें.")
-            
-            if avg_precipitation > 5:
-                st.write("⚠ सावधानी: भारी वर्षा की आशंका। जलभराव और जड़ सड़न से बचने के लिए उचित जल निकासी सुनिश्चित करें.")
-            elif avg_precipitation == 0:
-                st.write("⚠ सावधानी: वर्षा की संभावना नहीं। मिट्टी की नमी बनाए रखने के लिए सिंचाई पर विचार करें.")
-            
-            if avg_windspeed > 15:
-                st.write("-तेज़ हवाएँ फसलों को नुकसान पहुँचा सकती हैं। ढीले पौधों को सुरक्षित करें.\n")
-            
-            st.write('')
-            st.write('')   
-        else:
-            st.write("क्षमा करें, आपका स्थान निर्धारित नहीं किया जा सका। कृपया पुन: प्रयास करें.")
-        
-    elif mode=="🦠रोग-पहचान":
-        st.markdown("#  रोग-पहचान:")
-        st.write(" ")
-        st.write(" ")
-        
-        # Start Uploading Image section
-        st.header("📷 एक फसल छवि अपलोड करके प्रारंभ करें")
-        st.write(" ")
-        st.write("Uसंभावित बीमारियों का निदान शुरू करने के लिए नीचे अपनी फसल की छवि अपलोड करें। हमारा AI सब्जियों, फलों और अनाज सहित फसलों की एक विस्तृत श्रृंखला का समर्थन करने के लिए डिज़ाइन किया गया है.")
-        st.write(" ")
-        st.write(" ")
-
-        # Call to action button for image upload
-        uploaded_image = st.file_uploader("एक छवि चुनें...", type=["jpg", "jpeg", "png"])
-        
-        if uploaded_image is not None:
-            if st.button("छवि दिखाएँ"):
-                st.image(uploaded_image, use_column_width=True)
-
-            # Predict button
-            if st.button("भविष्यवाणी करना"):
-                # Store the prediction result
-                result = model_prediction(uploaded_image)
-                
-                # Define class names
-                progress_text = "मॉडल भविष्यवाणी कर रहा है...कृपया प्रतीक्षा करें"
-                my_bar = st.progress(0, text=progress_text)
-                for perc_completed in range(100):
-                    time.sleep(0.01)
-                    my_bar.progress(perc_completed + 1, text=progress_text)
-                    
-                st.success("यह है एक {}".format(result))
-
-                if result == 'Potato_Early_blight':
-                        st.header("आलू___अगेती_झुकाव")
-                        st.markdown("""
-                        आलू का प्रारंभिक झुलसा एक आम फफूंद रोग है जो अल्टरनेरिया सोलानी के कारण होता है। यह आमतौर पर गर्म, आर्द्र मौसम के दौरान आलू के पौधों को प्रभावित करता है और अगर प्रभावी ढंग से प्रबंधित नहीं किया जाता है तो यह उपज और गुणवत्ता को कम कर सकता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पुरानी पत्तियों पर गहरे भूरे से काले धब्बे बनते हैं जिनमें संकेंद्रित छल्ले (लक्ष्य जैसी उपस्थिति) होते हैं। ये धब्बे बढ़ सकते हैं, जिससे पत्तियों को काफी नुकसान हो सकता है।
-
-पीलापन: घावों के आसपास की पत्तियाँ पीली पड़ सकती हैं और अंततः मर सकती हैं।
-
-तने के घाव: तने पर गहरे, लम्बे घाव दिखाई दे सकते हैं।
-
-कंद का संक्रमण: गंभीर मामलों में, कंद धँसे हुए, गहरे घाव दिखा सकते हैं जिनकी बनावट चमड़े जैसी हो सकती है।
-
-रोकथाम:
-
-1. फसल चक्र: रोग चक्र को तोड़ने के लिए गैर-मेजबान पौधों (जैसे फलियाँ) के साथ फसलों को घुमाएँ।
-
-2. प्रतिरोधी किस्में: आलू की ऐसी किस्मों का उपयोग करें जो प्रारंभिक झुलसा के लिए प्रतिरोधी हों।
-
-3. खेत की अच्छी स्वच्छता: फफूंद की उपस्थिति को कम करने के लिए कटाई के बाद संक्रमित पौधों के मलबे को हटा दें और नष्ट कर दें।
-
-4. उचित अंतराल और छंटाई: पौधों के बीच पर्याप्त अंतराल सुनिश्चित करें और पौधों के आस-पास बेहतर वायु संचार और नमी को कम करने के लिए छंटाई करें।
-
-5. जल प्रबंधन: ऊपर से पानी देने से बचें, क्योंकि गीली पत्तियां फफूंद के विकास को बढ़ावा देती हैं। पत्तियों को जल्दी सूखने देने के लिए दिन में जल्दी पानी दें।
-
-6. संतुलित उर्वरक: संतुलित उर्वरक का उपयोग करें, पोटेशियम के पर्याप्त स्तर को सुनिश्चित करें, जो पौधे की प्रतिरोधक क्षमता को मजबूत करने में मदद कर सकता है।
-
-इलाज:
-
-1. कवकनाशी का प्रयोग:
-
-क्लोरोथालोनिल (जैसे, ब्रावो)
-
-मैनकोज़ेब (जैसे, डाइथेन)
-
-प्रणालीगत सुरक्षा के लिए एज़ोक्सीस्ट्रोबिन या डिफेनोकोनाज़ोल
-
-2. प्रयोग का समय: रोग के पहले संकेत पर या प्रारंभिक तुषार (गर्म, गीला मौसम) के लिए अनुकूल परिस्थितियों के दौरान निवारक उपाय के रूप में कवकनाशी का प्रयोग शुरू करें।
-
-3. कॉपर-आधारित स्प्रे: जैविक नियंत्रण के लिए, कॉपर-आधारित कवकनाशी नियमित रूप से उपयोग किए जाने पर प्रारंभिक झुलसा को प्रबंधित करने में मदद कर सकते हैं।
-
-4. एकीकृत प्रबंधन: सर्वोत्तम परिणामों के लिए कवकनाशी उपचारों को अच्छी सांस्कृतिक प्रथाओं के साथ मिलाएं।
-
-मुख्य बिंदु:
-
-प्रारंभिक पहचान: संक्रमण के शुरुआती लक्षणों के लिए नियमित रूप से फसलों का निरीक्षण करें और तुरंत उपचार करें।
-
-एकीकृत प्रबंधन दृष्टिकोण: प्रारंभिक झुलसा को प्रभावी ढंग से नियंत्रित करने के लिए प्रतिरोधी किस्मों, अच्छी सांस्कृतिक प्रथाओं और कवकनाशी अनुप्रयोगों के संयोजन का उपयोग करें।
-
-इन प्रथाओं को लागू करके, आलू की फसलों को प्रारंभिक झुलसा से बचाया जा सकता है, जिससे स्वस्थ पौधे और बेहतर उपज सुनिश्चित हो सकती है।""")
-
-                elif result == 'Potato_Late_blight':
-                        st.header("आलू___पछेती_झुकाव")
-                        st.markdown("""
-                        आलू का आरंभिक झुलसा: लक्षण, लक्षण, रोकथाम और उपचार अनुपूरक: आलू का आरंभिक झुलसा एक आम दुष्प्रभाव है जो अल्टरनेरिया सोलानी के कारण होता है। यह आम तौर पर गर्म, आर्द्र मौसम के दौरान आलू के गुणों को प्रभावित करता है और अगर अप्रभावी से उपयोग नहीं किया जाता है तो यह उपयोज्य और गुणवत्ता को कम कर सकता है।
-
-लक्षण: पत्तों के सूचीबद्ध: पुराने स्थिर पर घने भूरे से काले भंडार में अन्य संवर्धित वस्तुएं (लक्ष्य जैसी उपस्थिति) होती हैं। ये अंकित मूल्य वृद्धि कर सकते हैं, जिससे नामांकन को काफी नुकसान हो सकता है।
-
-पीलापन: मांसपेशियों के आसपास की पत्तियाँ गिर सकती हैं और अंततः मर सकती हैं।
-
-तने के घाव: तने पर सुदूर, उष्ण कटिबंधीय घाव दिखाई दे सकते हैं।
-
-कंद का संक्रमण: गंभीर मामलों में, कंद धँसे, घिसे हुए घाव के लक्षण क्वांटम ऑर्थोडॉक्स जैसे हो सकते हैं।
-
-रोकथाम: 1. फल चक्र: रोग चक्र को तोड़ने के लिए गैर-मेजबान अधिकृत (जैसे फल) के साथ निमोनिया को ठीक करें।
-
-2. आलू की ऐसी चटनी का उपयोग करें जो शुरू में झुलसा के लिए होता है।
-
-3. खेत की अच्छी स्वतन्त्रता: श्रमिकों के टुकड़ों को काटने के बाद अवशेषों को हटाकर नष्ट कर दिया जाए।
-
-4. प्रमाणित और स्थिरांक: प्रमाणित और प्रमाणित के बीच बेहतर वायु संचार और प्रयोगशाला को कम करने के लिए।
-
-5. जल प्रबंधन: ऊपर से पानी देने से इनकार, क्योंकि मित्रता के विकास को बढ़ावा दिया जाता है। एक दिन में जल्दी पानी देने के लिए इंस्टीट्यूशनल प्लान।
-
-6. मानक स्तर की योग्यता सहायता: मानक स्तर का उपयोग करें, सीमेंट के समुच्चय स्तर को सुनिश्चित करें, जो उपचार की को मजबूत करने में सक्षम है।
-
-उपचार: 1. कवकनाशी का उपयोग: क्लोरोथालोनिल (जैसे, ब्रावो) मैनकोज़ेब (जैसे, डाइथेनोहाइड्रेट) प्रणालीगत सुरक्षा के लिए एज़ोक्सीस्ट्रोबिन या डिफेनोकोनाज़ोल 2. प्रयोग का समय: रोग के पहले संकेत पर या प्रारंभिक तुषार (गर्म, बैक्टीरिया) के लिए उपयुक्त अल्ट्रासाउंड के दौरान उपचारात्मक उपाय के रूप में कवकनाशी का प्रयोग शुरू करें।
-
-3. कॉपर-आधारित कीटनाशक: जैविक नियंत्रण के लिए, कॉपर-आधारित कीटनाशकों का नियमित रूप से उपयोग करने से प्रारंभिक रूप से झुलसा को नियंत्रित करने में मदद मिल सकती है।
-
-4. निर्मित प्रबंधन: अच्छे सांस्कृतिक फलों के साथ कवकनाशी उपचारों के लिए सर्वोत्तम दिशा-निर्देश।
-
-मुख्य बिंदु: प्रारंभिक पहचान: संक्रमण के प्रारंभिक उद्घाटन के लिए नियमित रूप से लीबिया का निरीक्षण करें और तुरंत उपचार करें।
-
-कच्चे माल प्रबंधन दृष्टिकोण: प्रारंभिक झुलसा को प्रभावी से नियंत्रित करने के लिए संक्षिप्त, अच्छा सांस्कृतिक घटक और कीमाशी रसायन के संयोजन का उपयोग करें।
-
-इन फैक्ट्स को लागू करके, आलू की सब्जियों को शुरुआती झुलसा से बाजार में उतारा जा सकता है, जिससे स्वस्थ्य उपचार और बेहतर उपजीविका सुनिश्चित हो सकती है।
-""")
-                elif result=="Apple__Apple_scab":
-                    st.header("सेब की पपड़ी")
-                    st.markdown(""" 
-सेब की पपड़ी वेन्चुरिया इनाइक्वालिस के कारण होने वाली एक आम फंगल बीमारी है, जो सेब के पेड़ों और अन्य संबंधित पौधों को प्रभावित करती है। इससे पत्तियों, फलों और यहां तक ​​कि टहनियों को काफी नुकसान पहुंचता है, जिससे फल की उपस्थिति और विपणन क्षमता दोनों पर असर पड़ता है।
-
-लक्षण:
-
-पत्तियों और फलों पर जैतून-हरे से भूरे रंग के मखमली धब्बे
-
-पत्तियाँ विकृत हो सकती हैं और समय से पहले गिर सकती हैं
-
-फलों पर काले, उभरे हुए घाव जो बड़े होने पर टूट सकते हैं
-
-गंभीर मामलों में, फल की पैदावार और पेड़ की ताक़त कम हो जाती है
-
-
-रोकथाम:
-
-किस्म का चयन: जोखिम को कम करने के लिए सेब की प्रतिरोधी किस्में लगाएं।
-
-उचित स्वच्छता: कवक के प्रसार को कम करने के लिए गिरी हुई पत्तियों और संक्रमित फलों को हटा दें और नष्ट कर दें।
-
-छंटाई: पत्तों को सूखा रखने के लिए उचित छंटाई के माध्यम से अच्छा वायु संचार बनाए रखें।
-
-निवारक कवकनाशी: पत्ती और फल के विकास के प्रारंभिक चरण के दौरान कवकनाशी लागू करें, विशेष रूप से गीली स्थितियों वाले क्षेत्रों में।
-
-
-इलाज:
-
-
-सेब की पपड़ी का इलाज:
-
-1. कवकनाशी उपचार:
-
-संक्रमण के पहले संकेत पर या शुरुआती वसंत के दौरान निवारक रूप से वेन्चुरिया इनाइक्वालिस के खिलाफ विशेष रूप से प्रभावी कवकनाशी लागू करें। आमतौर पर मायक्लोबुटानिल, कैप्टान या मैन्कोजेब युक्त कवकनाशकों का उपयोग किया जाता है। सुरक्षित और प्रभावी उपयोग के लिए हमेशा स्थानीय दिशानिर्देशों का पालन करें।
-
-
-
-2. सांस्कृतिक प्रथाएँ:
-
-संक्रमित सामग्री हटाएँ: बीजाणुओं के स्रोतों को ख़त्म करने के लिए गिरी हुई पत्तियों और फलों को रेक करें और उनका निपटान करें।
-
-वायु प्रवाह के लिए छंटाई: वायु परिसंचरण में सुधार के लिए नियमित रूप से पेड़ की छंटाई करें, जो पत्तियों को सूखा रखने में मदद करता है और फंगल विकास को रोकता है।
-
-
-
-.
-
-पेड़ों की नियमित निगरानी, ​​बगीचे में साफ-सफाई बनाए रखना और आवश्यकतानुसार उपचार करने से सेब स्कैब के प्रभाव को काफी कम किया जा सकता है।
-
-                    """)
-
-                elif result=="Apple_Black_rot":
-                    st.header("एप्पल ब्लैक रोट")
-                    st.markdown(""" 
-सेब का काला सड़न बोट्रीओस्फेरिया ओबटुसा के कारण होने वाला एक कवक रोग है। यह सेब के पेड़ों को प्रभावित करता है, जिससे फलों में सड़न, पत्तियों पर धब्बे और यहां तक ​​कि शाखाओं पर कैंकर हो जाते हैं, जिससे फल की गुणवत्ता और पेड़ के स्वास्थ्य में कमी आती है।
-
-लक्षण:
-
-फलों का सड़ना: फलों पर गहरे, गोलाकार, धंसे हुए घाव जो फैलते हैं और संकेंद्रित छल्लों के साथ काले हो जाते हैं।
-
-पत्ती पर धब्बे: पत्तियों पर छोटे, बैंगनी-किनारे वाले घाव जिससे पत्तियां जल्दी गिर सकती हैं।
-
-कैंकर: शाखाओं या तनों पर धँसा हुआ, काला क्षेत्र, जो टूट सकता है और फैल सकता है, जिससे पेड़ कमज़ोर हो सकता है।
-
-
-रोकथाम:
-
-स्वच्छता: फंगल बीजाणु स्रोतों को सीमित करने के लिए गिरी हुई पत्तियों, फलों और कटी हुई शाखाओं को हटा दें।
-
-उचित छंटाई: बीमारी को फैलने से रोकने के लिए संक्रमित शाखाओं की छँटाई करें और उनका निपटान करें।
-
-वृक्ष स्वास्थ्य: प्राकृतिक प्रतिरोध को बढ़ावा देने के लिए उचित पानी, उर्वरक और कीट नियंत्रण के माध्यम से वृक्षों के स्वास्थ्य को बनाए रखें।
-
-कवकनाशी का उपयोग: बढ़ते मौसम के दौरान, विशेष रूप से आर्द्र क्षेत्रों में, निवारक उपाय के रूप में कवकनाशी लागू करें।
-
-
-इलाज:
-
-नासूरों को छांटना: प्रभावित शाखाओं को दिखाई देने वाली क्षति से कम से कम 6-12 इंच दूर काटें, काटने के बीच उपकरणों को कीटाणुरहित करें।
-
-कवकनाशी अनुप्रयोग: रोग के प्रसार को नियंत्रित करने के लिए कैप्टान या थियोफैनेट-मिथाइल युक्त कवकनाशी का उपयोग करें। स्थानीय विस्तार सेवा अनुशंसाओं के अनुसार आवेदन करें।
-
-अच्छा बाग प्रबंधन: बाग को साफ और सुव्यवस्थित रखें, यह सुनिश्चित करें कि पेड़ों में हवा के संचार के लिए उचित दूरी हो।
-
-                    """)
-
-
-                elif result=="Corn_Blight":
-                    st.header("कॉर्न ब्लाइट")
-                    st.markdown("""
-कॉर्न ब्लाइट मकई की फसल को प्रभावित करने वाला एक कवक रोग है, जो आमतौर पर बाइपोलारिस मेडीस (दक्षिणी कॉर्न लीफ ब्लाइट) या एक्ससेरोहिलम टर्सीकम (उत्तरी कॉर्न लीफ ब्लाइट) के कारण होता है। इसके परिणामस्वरूप उपज में महत्वपूर्ण हानि हो सकती है, विशेषकर गर्म और आर्द्र परिस्थितियों में।
-
-लक्षण:
-
-साउदर्न कॉर्न लीफ ब्लाइट: पत्तों पर भूरे, अंडाकार से लेकर गहरे किनारों वाले लंबे घाव।
-
-उत्तरी मकई पत्ती झुलसा: बड़े, सिगार के आकार के भूरे रंग के घाव जो विलय कर सकते हैं और पूरी पत्तियों को ढक सकते हैं, जिससे प्रकाश संश्लेषण कम हो जाता है।
-
-उन्नत चरण: समय से पहले पत्तियों का मरना, कमजोर पौधे और बालियों का विकास कम होना।
-
-
-रोकथाम:
-
-प्रतिरोधी किस्में: मकई की ऐसी संकर प्रजातियाँ लगाएँ जो क्षेत्र में आम तौर पर होने वाले विशिष्ट प्रकार के झुलसा रोग के प्रति प्रतिरोधी हों।
-
-फसल चक्रण: कवक के जीवन चक्र को तोड़ने के लिए गैर-मेजबान पौधों के साथ फसलों का चक्रीकरण करें।
-
-खेत की स्वच्छता: सर्दियों में फफूंद के बीजाणुओं को कम करने के लिए कटाई के बाद संक्रमित पौधों के मलबे को हटा दें और नष्ट कर दें।
-
-उचित दूरी: वायु परिसंचरण को बढ़ावा देने और नमी के संचय को कम करने के लिए पौधों के बीच पर्याप्त दूरी सुनिश्चित करें।
-
-
-इलाज:
-
-कवकनाशी अनुप्रयोग: जब लक्षण पहली बार दिखाई दें या उच्च जोखिम वाली स्थितियों में निवारक उपाय के रूप में एज़ोक्सीस्ट्रोबिन या प्रोपिकोनाज़ोल युक्त कवकनाशी का उपयोग करें।
-
-समय पर हस्तक्षेप: फसलों की नियमित निगरानी करें और बीमारी के प्रसार को कम करने के लिए शीघ्र उपचार लागू करें।
-
-एकीकृत कीट प्रबंधन (आईपीएम): व्यापक नियंत्रण के लिए सांस्कृतिक प्रथाओं, प्रतिरोधी किस्मों और रासायनिक उपचारों को मिलाएं।
-
-
-मकई के झुलसा रोग को प्रभावी ढंग से प्रबंधित करने और न्यूनतम फसल क्षति सुनिश्चित करने के लिए नियमित निगरानी और शीघ्र पता लगाना महत्वपूर्ण है।
- """)
-                elif result=="Corn_Common_Rust":
-                    st.header("कॉर्न कॉमन रस्ट")
-                    st.markdown("""
-मकई आम जंग: अवलोकन, लक्षण, रोकथाम और इलाज
-
-अवलोकन: कॉर्न कॉमन रस्ट एक कवक रोग है जो पुकिनिया सोरघी के कारण होता है। यह ठंडी और आर्द्र परिस्थितियों में मकई की फसल को प्रभावित कर सकता है, जिससे उपज कम हो सकती है और गंभीर होने पर पौधे कमजोर हो सकते हैं।
-
-लक्षण:
-
-फुंसी: पत्तियों के दोनों तरफ छोटे, अंडाकार से लेकर गोलाकार, लाल-भूरे रंग की फुंसियां।
-
-पत्ती क्षति: जैसे-जैसे रोग बढ़ता है, फुंसियाँ विलीन हो सकती हैं, जिससे पत्तियाँ सूखने लगती हैं और समय से पहले मर जाती हैं।
-
-प्रकाश संश्लेषण में कमी: गंभीर संक्रमण पौधे की प्रकाश संश्लेषण करने की क्षमता को ख़राब कर सकता है, जिससे इसकी समग्र वृद्धि कमजोर हो सकती है।
-
-
-रोकथाम:
-
-प्रतिरोधी किस्में: संवेदनशीलता को कम करने के लिए मकई की संकर प्रजातियाँ लगाएं जो सामान्य जंग के लिए प्रतिरोधी हों।
-
-फसल चक्र: मिट्टी में कवक बीजाणुओं के निर्माण को कम करने के लिए फसल चक्र का अभ्यास करें।
-
-मौसम की स्थिति पर नज़र रखें: ठंडे, नम मौसम के दौरान सतर्क रहें, जो जंग के विकास के लिए अनुकूल है।
-
-
-इलाज:
-
-कवकनाशी अनुप्रयोग: जब जंग का जल्दी पता चल जाए तो स्ट्रोबिल्यूरिन या ट्राईज़ोल युक्त फफूंदनाशकों का प्रयोग करें। उचित कवरेज सुनिश्चित करें और लेबल निर्देशों का पालन करें।
-
-समय पर छिड़काव: कवकनाशी अनुप्रयोगों के साथ प्रारंभिक हस्तक्षेप से प्रसार को नियंत्रित करने और क्षति को सीमित करने में मदद मिल सकती है।
-
-खेत की स्वच्छता: भविष्य में संक्रमण के स्रोत को कम करने के लिए कटाई के बाद संक्रमित पौधे के मलबे को हटा दें।
-
-
-नियमित निगरानी, ​​प्रतिरोधी मकई किस्मों का उपयोग, और कवकनाशी का समय पर उपयोग मकई के आम जंग को प्रभावी ढंग से प्रबंधित करने और ठीक करने के लिए आवश्यक है।""")
-
-                elif result=="Corn_Gray_Leaf_Spot":
-                    st.header("कॉर्न ग्रे लीफ स्पॉट")
-                    st.markdown(""" कॉर्न ग्रे लीफ स्पॉट सर्कोस्पोरा ज़ी-मेडिस के कारण होने वाला एक सामान्य कवक रोग है। यह गर्म, आर्द्र परिस्थितियों में पनपता है और प्रकाश संश्लेषक पत्ती क्षेत्र को कम करके पैदावार को महत्वपूर्ण रूप से प्रभावित कर सकता है।
-
-लक्षण:
-
-प्रारंभिक घाव: निचली पत्तियों पर छोटे, आयताकार, भूरे-भूरे रंग के घाव।
-
-प्रगति: घाव लंबे हो सकते हैं और पत्ती की शिराओं के समानांतर विकसित हो सकते हैं, अंततः विलीन हो जाते हैं और मृत ऊतक के बड़े क्षेत्र बन जाते हैं।
-
-प्रकाश संश्लेषण में कमी: गंभीर संक्रमण से समय से पहले पत्तियां मर सकती हैं, जिससे प्रकाश संश्लेषण और फसल की उपज कम हो सकती है।
-
-
-रोकथाम:
-
-प्रतिरोधी किस्में: संकर पौधे जिनमें भूरे पत्तों के धब्बों के प्रति आनुवंशिक प्रतिरोध होता है।
-
-फसल चक्रण: कवक बीजाणु के फैलाव को कम करने के लिए गैर-मेज़बान पौधों के साथ फसलों का चक्रीकरण करें।
-
-अवशेष प्रबंधन: फंगस को अधिक सर्दी से बचाने के लिए संक्रमित पौधे के मलबे को हल से जोत दें या हटा दें।
-
-पौधों के बीच अंतर: वायु परिसंचरण में सुधार और पत्तियों के गीलेपन को कम करने के लिए पौधों के बीच उचित अंतर रखें।
-
-
-इलाज:
-
-फफूंदनाशक अनुप्रयोग: निम्नलिखित युक्त फफूंदनाशकों का प्रयोग करें:
-
-एज़ोक्सीस्ट्रोबिन (जैसे, क्वाड्रिस)
-
-पायराक्लोस्ट्रोबिन (जैसे, हेडलाइन)
-
-प्रोपिकोनाज़ोल (उदाहरण के लिए, झुकाव)
-
-टेबुकोनाज़ोल (उदाहरण के लिए, फोलिकुर)
-
-
-समय: सर्वोत्तम परिणामों के लिए रोग के विकास के शुरुआती चरणों में या वीटी (टैसलिंग) से आर1 (सिल्किंग) विकास चरणों में कवकनाशी लागू करें।
-
-एकीकृत प्रबंधन: बेहतर रोग प्रबंधन के लिए रासायनिक नियंत्रण को सांस्कृतिक प्रथाओं के साथ जोड़ें।
-
-
-फसल चक्र और प्रतिरोधी संकर जैसे निवारक उपायों के साथ-साथ समय पर कवकनाशी का उपयोग, मकई के भूरे पत्तों के धब्बे के प्रभाव को प्रभावी ढंग से प्रबंधित करने और कम करने में मदद कर सकता है।
-""")
-                elif result=="Cotton_bacterial_blight":
-                    st.header("Cotton Bacterial Blight")
-                    st.markdown("""
-कॉटन बैक्टीरियल ब्लाइट, जो ज़ैंथोमोनस सिट्री पीवी के कारण होता है। मालवेसीरम, एक गंभीर बीमारी है जो कपास के पौधे के सभी भागों को प्रभावित कर सकती है। यह गर्म, आर्द्र परिस्थितियों में पनपता है और इससे उपज को काफी नुकसान हो सकता है।
-
-लक्षण:
-
-पत्ती पर धब्बे: पत्तियों पर पानी से लथपथ, कोणीय घाव जो भूरे या काले हो जाते हैं और विलीन हो सकते हैं, जिससे पत्तियां गिर सकती हैं।
-
-तने और बीजकोष पर घाव: तने और बीजकोषों पर काले, धंसे हुए धब्बे, जिससे बीजकोष सड़ सकते हैं।
-
-पत्ते गिरना: गंभीर संक्रमण के कारण पत्तियां जल्दी गिर सकती हैं, पौधा कमजोर हो सकता है और प्रकाश संश्लेषण कम हो सकता है।
-
-
-रोकथाम:
-
-प्रतिरोधी किस्में: कपास की ऐसी किस्में लगाएं जो बैक्टीरिया ब्लाइट के प्रति प्रतिरोधी हों।
-
-बीज उपचार: प्रमाणित, रोग-मुक्त बीजों का उपयोग करें और निवारक उपाय के रूप में बीजों को जीवाणुनाशकों से उपचारित करें।
-
-फसल चक्र: मिट्टी में रोगज़नक़ों के निर्माण को कम करने के लिए कपास को गैर-मेज़बान फसलों के साथ क्रमबद्ध करें।
-
-खेत की स्वच्छता: सर्दियों में बैक्टीरिया को कम करने के लिए कटाई के बाद पौधों के मलबे को हटा दें और नष्ट कर दें।
-
-ओवरहेड सिंचाई से बचें: अतिसंवेदनशील विकास चरणों के दौरान ओवरहेड सिंचाई से बचकर पत्तियों का गीलापन कम करें।
-
-
-इलाज:
-
-तांबा आधारित जीवाणुनाशक:
-
-कॉपर हाइड्रॉक्साइड (जैसे, कोसाइड, चैंपियन) और कॉपर ऑक्सीक्लोराइड (जैसे, कॉपर सल्फेट) बैक्टीरियल ब्लाइट को नियंत्रित करने के लिए सबसे अधिक इस्तेमाल किए जाने वाले जीवाणुनाशक हैं। इन्हें बैक्टीरिया के प्रसार को कम करने के लिए, विशेषकर गीली स्थितियों के दौरान, पत्तियों पर स्प्रे के रूप में लगाया जा सकता है।
-
-
-समय पर निगरानी: शीघ्र पता लगाने और त्वरित प्रतिक्रिया के लिए नियमित रूप से फ़ील्ड की निगरानी करें।
-
-एकीकृत प्रबंधन: प्रभावी नियंत्रण के लिए सांस्कृतिक प्रथाओं, प्रतिरोधी किस्मों और लक्षित जीवाणुनाशक अनुप्रयोग को मिलाएं।
-
-
-अच्छे खेत की स्वच्छता बनाए रखना, प्रतिरोधी किस्मों का उपयोग करना और समय पर जीवाणुनाशक अनुप्रयोग कपास के जीवाणु ब्लाइट के प्रबंधन और इसके प्रभाव को कम करने के लिए प्रमुख रणनीतियाँ हैं।""")
-                elif result=="Cotton_curl_virus":
-                    st.header("कॉटन कर्ल वायरस")
-                    st.markdown("""
-कॉटन कर्ल वायरस (जिसे कॉटन लीफ कर्ल वायरस या CLCuV के नाम से भी जाना जाता है) एक वायरल बीमारी है जो मुख्य रूप से व्हाइटफ़्लाइज़ (बेमिसिया टैबैसी) द्वारा फैलती है। यह कई क्षेत्रों में कपास की फसलों के लिए एक महत्वपूर्ण समस्या है, जिससे पैदावार कम होती है और कपास की गुणवत्ता खराब होती है।
-
-लक्षण:
-
-लीफ़ कर्लिंग: सबसे विशिष्ट लक्षण पत्तियों का ऊपर की ओर मुड़ना है।
-
-पीलापन: प्रभावित पत्तियाँ पीली हो सकती हैं, विशेष रूप से शिराओं के साथ (जिसे क्लोरोसिस कहा जाता है)।
-
-स्टंटिंग: पौधे कमज़ोर हो सकते हैं, विकास कम हो सकता है और छोटे बीजकोष हो सकते हैं।
-
-मोज़ेक पैटर्न: अनियमित क्लोरोसिस के कारण पत्तियाँ मोज़ेक या धब्बेदार दिखाई दे सकती हैं।
-
-समय से पहले गिरना: गंभीर मामलों में, पत्तियाँ समय से पहले गिर सकती हैं, और बीजकोष ठीक से विकसित नहीं हो सकते हैं।
-
-रोकथाम:
-
-कीट नियंत्रण: कीटनाशकों का उपयोग करके सफ़ेद मक्खी की आबादी को नियंत्रित करें जैसे:
-
-इमिडाक्लोप्रिड (जैसे, कॉन्फिडोर)
-
-थियामेथोक्सम (जैसे, एक्टारा)
-
-पाइरीप्रोक्सीफेन (जैसे, नैक)
-
-प्रतिरोधी किस्मों का उपयोग: कपास की ऐसी किस्में लगाएँ जो कॉटन कर्ल वायरस के लिए प्रतिरोधी हों।
-
-खेत की सफ़ाई: वायरल स्रोतों को कम करने के लिए कटाई के बाद संक्रमित पौधों और मलबे को हटा दें।
-
-फ़सल चक्रण: सफ़ेद मक्खी और वायरल प्रसार के चक्र को तोड़ने के लिए लगातार कपास की फ़सल लगाने से बचें।
-
-रिफ़्लेक्टिव मल्च: सफ़ेद मक्खियों को दूर भगाने और उनकी संख्या को कम करने के लिए रिफ़्लेक्टिव मल्च या कवर फ़सल का उपयोग करें।
-
-उपचार:
-
-वायरस का कोई इलाज नहीं: एक बार संक्रमित होने के बाद, पौधों को कॉटन कर्ल वायरस से ठीक नहीं किया जा सकता।
-
-वेक्टर नियंत्रण: फ़सल के भीतर वायरस के आगे प्रसार को रोकने के लिए सफ़ेद मक्खी वेक्टर को नियंत्रित करने पर ध्यान दें।
-
-प्रारंभिक पहचान: लक्षणों के लिए नियमित रूप से फसलों की निगरानी करें और स्वस्थ पौधों तक वायरस के प्रसार को सीमित करने के लिए संक्रमित पौधों को तुरंत हटा दें।
-
-कॉटन कर्ल वायरस के लिए एकीकृत प्रबंधन की आवश्यकता होती है, जिसमें व्हाइटफ्लाई आबादी को नियंत्रित करने और प्रभावी रोकथाम के लिए प्रतिरोधी कपास किस्मों का उपयोग करने पर ध्यान केंद्रित किया जाता है।""")
-                    
-                elif result=="Grape_Black_rot":
-                    st.header("Grape Black rot")
-                    st.markdown(""" 
-अंगूर का काला सड़न एक फफूंद रोग है जो गिग्नार्डिया बिडवेली के कारण होता है। यह अंगूर को प्रभावित करता है और विशेष रूप से गर्म, आर्द्र परिस्थितियों वाले क्षेत्रों में आम है। यह रोग अंगूर की फसल की मात्रा और गुणवत्ता दोनों को कम कर सकता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों पर पीले रंग के प्रभामंडल के साथ छोटे, काले, गोलाकार घाव दिखाई देते हैं।
-
-फल सड़न: अंगूर के गुच्छों पर काले, धँसे हुए घाव विकसित होते हैं। संक्रमित फल कठोर, सिकुड़े हुए हो जाते हैं और समय से पहले गिर सकते हैं।
-
-बेल को नुकसान: गंभीर मामलों में, कवक तने और टेंड्रिल को भी संक्रमित कर सकता है, जिससे वे काले पड़ जाते हैं और सड़ जाते हैं।
-
-रोकथाम:
-
-प्रतिरोधी किस्में: अंगूर की ऐसी किस्में लगाएँ जो काले सड़न के लिए प्रतिरोधी हों।
-
-सफाई: फफूंद बीजाणुओं के स्रोतों को कम करने के लिए संक्रमित पत्तियों, जामुन और अन्य पौधों के मलबे को हटा दें और नष्ट कर दें।
-
-उचित अंतराल: नमी को कम करने के लिए पौधों के बीच पर्याप्त अंतराल प्रदान करके और छंटाई करके बेलों के चारों ओर अच्छा वायु संचार सुनिश्चित करें।
-
-कवकनाशी का प्रयोग: शुरुआती विकास चरणों के दौरान और फूल आने से ठीक पहले कवकनाशी का प्रयोग करें। प्रभावी कवकनाशी में शामिल हैं:
-
-कैप्टन
-
-क्लोरोथालोनिल (उदाहरण के लिए, ब्रावो)
-
-मैन्कोज़ेब
-
-प्रयोग का समय: नई वृद्धि की रक्षा करने और कवक को सर्दियों में पनपने से रोकने के लिए बरसात के मौसम से पहले और कटाई के बाद कवकनाशी का प्रयोग करें।
-
-उपचार:
-
-कवकनाशी उपचार: संक्रमण को रोकने के लिए नियमित अंतराल पर कैप्टन, क्लोरोथालोनिल या मैन्कोज़ेब जैसे कवकनाशी का प्रयोग करें। उपचार मौसम की शुरुआत में (लक्षण दिखने से पहले) शुरू किया जाना चाहिए और उच्च जोखिम अवधि के दौरान जारी रखना चाहिए।
-
-संक्रमित क्षेत्रों की छंटाई: कवक के प्रसार को सीमित करने के लिए बेल के संक्रमित भागों की छंटाई करें और उन्हें हटा दें।
-
-अवशिष्ट सुरक्षा के लिए स्प्रे करें: नए फलों में ब्लैक रॉट के प्रसार को रोकने के लिए बढ़ते मौसम के अंत तक कवकनाशी का छिड़काव जारी रखें।
-
-नियमित निगरानी, ​​समय पर कवकनाशी का प्रयोग, तथा उचित साफ-सफाई अंगूर की काली सड़न को रोकने और नियंत्रित करने के लिए महत्वपूर्ण हैं।
-""")
-                elif result=="Grape_Leaf_blight(Isariopsis_Leaf_Spot)":
-                    st.header("Grape Leaf Blight / Isariopsis Leaf Spot")
-                    st.markdown("""
-अंगूर का झुलसा रोग फ़ोमोप्सिस विटिकोला के कारण होने वाला एक कवक रोग है। यह अंगूर की बेलों को प्रभावित करता है, खास तौर पर आर्द्र जलवायु में, और खास तौर पर शुरुआती बढ़ते मौसम के दौरान काफी नुकसान पहुंचा सकता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों पर हल्के भूरे रंग के केंद्र के साथ छोटे, गहरे, गोल घाव दिखाई देते हैं, अक्सर पीले रंग के घेरे के साथ।
-
-अंकुर झुलसा रोग: युवा अंकुरों में भूरे, धँसे हुए घाव विकसित हो सकते हैं जो मरने का कारण बनते हैं, जिससे बेल की वृद्धि प्रभावित होती है।
-
-फलों को नुकसान: संक्रमित अंगूर के गुच्छों पर पानी से भीगे हुए धब्बे दिखाई देते हैं जो काले हो जाते हैं और फल को मुरझाने और सड़ने का कारण बन सकते हैं।
-
-बेल का मुरझाना: गंभीर मामलों में, संक्रमित बेंत मर सकते हैं, और बेल रुकी हुई या कमज़ोर हो सकती है।
-
-रोकथाम:
-
-प्रतिरोधी किस्में: फ़ोमोप्सिस झुलसा रोग के लिए प्रतिरोधी अंगूर की किस्मों का चयन करें।
-
-छंटाई और सफ़ाई: संक्रमित लताओं की नियमित छंटाई करें, संक्रमित टहनियों और पत्तियों को हटाएँ और नष्ट करें। गिरे हुए मलबे को साफ़ करें जिसमें बीजाणु हो सकते हैं।
-
-उचित अंतराल: नमी को कम करने के लिए लताओं के चारों ओर पर्याप्त वायु परिसंचरण सुनिश्चित करें, जो फंगल वृद्धि को बढ़ावा देता है।
-
-फफूंदनाशक का उपयोग: फफूंदनाशकों का उपयोग करें जैसे:
-
-कैप्टन
-
-क्लोरोथालोनिल (उदाहरण के लिए, ब्रावो)
-
-माइक्लोबुटानिल (उदाहरण के लिए, रैली)
-
-छिड़काव का समय: मौसम की शुरुआत में, कलियों के टूटने से पहले और फूल आने के दौरान छिड़काव शुरू करें, और नियमित अंतराल पर, विशेष रूप से बारिश के बाद जारी रखें।
-
-उपचार:
-
-फफूंदनाशक उपचार: नई वृद्धि की रक्षा और फंगल संक्रमण को रोकने के लिए महत्वपूर्ण अवधि के दौरान कैप्टन, क्लोरोथालोनिल या माइक्लोबुटानिल जैसे फफूंदनाशकों का उपयोग करें।
-
-संक्रमित क्षेत्रों की छंटाई: रोग के प्रसार को रोकने के लिए किसी भी संक्रमित टहनियों, पत्तियों या फलों को हटा दें और नष्ट कर दें।
-
-नियमित रूप से निगरानी करें: नियमित रूप से बेलों का निरीक्षण करें, विशेष रूप से गीले मौसम के बाद, और आवश्यकतानुसार कवकनाशी का पुनः प्रयोग करें।
-
-अंगूर के झुलसा रोग के लिए सक्रिय प्रबंधन की आवश्यकता होती है, जिसमें संक्रमण के जोखिम को कम करने और क्षति को क
-म करने के लिए उचित छंटाई और खेत की सफाई के साथ कवकनाशी का प्रयोग करना शामिल है।
-""")
-                elif result=="Pepper,_bell_Bacterial_spot":
-                    st.header("Bell Pepper Bacterial spot")
-                    st.markdown("""
-पेपर बेल बैक्टीरियल स्पॉट ज़ैंथोमोनस यूवेसिकेटोरिया के कारण होने वाली एक गंभीर बीमारी है। यह मुख्य रूप से मिर्च (बेल मिर्च सहित) को प्रभावित करता है और विशेष रूप से गर्म और आर्द्र परिस्थितियों में महत्वपूर्ण उपज हानि का कारण बन सकता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों की ऊपरी सतह पर छोटे, पानी से लथपथ घाव जो पीले रंग के प्रभामंडल के साथ कोणीय हो जाते हैं।
-
-फलों पर घाव: फलों पर गहरे, धँसे हुए घाव दिखाई दे सकते हैं, जो नरम हो सकते हैं और सड़ सकते हैं।
-
-पत्ते झड़ना: गंभीर संक्रमण से समय से पहले पत्तियाँ गिर जाती हैं, जिससे प्रकाश संश्लेषण कम हो जाता है और पौधा कमज़ोर हो जाता है।
-
-अवरुद्ध विकास: पौधे बौने हो सकते हैं, जिससे फलों का आकार और कुल उपज कम हो सकती है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: मिर्च की ऐसी किस्में चुनें जो बैक्टीरियल स्पॉट के लिए प्रतिरोधी हों।
-
-2. बीज उपचार: रोग मुक्त बीजों का उपयोग करें और रोपण से पहले बीजों को जीवाणुनाशकों से उपचारित करें।
-
-3. उचित अंतराल और छंटाई: पौधों के बीच उचित अंतराल रखकर और पौधे के आस-पास नमी कम करने के लिए अतिरिक्त पत्तियों की छंटाई करके अच्छा वायु संचार सुनिश्चित करें।
-
-4. फसल चक्र: मिट्टी में बैक्टीरिया के निर्माण को कम करने के लिए मिर्च को लगातार एक ही मिट्टी में न लगाएं।
-
-5. खेत की सफाई: संक्रमित पौधों के मलबे को हटा दें और नष्ट कर दें, क्योंकि बैक्टीरिया पौधे के अवशेषों में सर्दियों में रह सकते हैं।
-
-6. ओवरहेड सिंचाई से बचें: पत्तियों को सूखा रखने के लिए ड्रिप सिंचाई का उपयोग करें, क्योंकि गीली परिस्थितियाँ बैक्टीरिया के प्रसार को बढ़ावा देती हैं।
-
-इलाज:
-
-1. कॉपर-आधारित जीवाणुनाशक: कॉपर-आधारित उत्पादों का उपयोग करें जैसे:
-
-कॉपर हाइड्रॉक्साइड (जैसे, कोसाइड)
-
-कॉपर सल्फेट (जैसे, चैंपियन)
-
-कॉपर ऑक्सीक्लोराइड
-
-ये बैक्टीरिया के विकास को प्रबंधित करने में मदद कर सकते हैं, खासकर गीली परिस्थितियों में।
-
-2. जैविक नियंत्रण: बैसिलस सबटिलिस या स्यूडोमोनास फ्लोरोसेंस जैसे कुछ जैविक एजेंट बैक्टीरिया की गतिविधि को दबा सकते हैं।
-
-3. समय पर छिड़काव: संक्रमण के पहले संकेत पर या उच्च जोखिम अवधि (गर्म, गीला मौसम) के दौरान निवारक उपाय के रूप में जीवाणुनाशकों का छिड़काव करें।
-
-4. संक्रमित पौधे के हिस्सों की छंटाई: बैक्टीरिया के प्रसार को कम करने के लिए संक्रमित पत्तियों, तनों और फलों को हटा दें और उनका निपटान करें।
-
-मुख्य बिंदु:
-
-पूर्ण इलाज नहीं: एक बार पौधे को संक्रमित करने के बाद बैक्टीरियल स्पॉट को पूरी तरह से ठीक नहीं किया जा सकता है, इसलिए शुरुआती रोकथाम और नियंत्रण महत्वपूर्ण है।
-
-एकीकृत कीट प्रबंधन (आईपीएम): रोग को प्रभावी ढंग से प्रबंधित करने के लिए सांस्कृतिक प्रथाओं (जैसे उचित अंतराल और फसल चक्रण), प्रतिरोधी किस्मों और रासायनिक नियंत्रण को मिलाएं।
-
-नियमित निगरानी, ​​उचित देखभाल और समय पर उपचार मिर्च बेल बैक्टीरियल स्पॉट को नियंत्रित करने और आपकी फसल पर इसके प्रभाव को कम करने के लिए आवश्यक है।
-""")
-                elif result=="Rice_bacterial_leaf_blight":
-                    st.header("Rice Bacterial Blight")
-                    st.markdown(""" 
-चावल जीवाणु पत्ती झुलसा (बीएलबी) एक विनाशकारी रोग है जो ज़ैंथोमोनस ओराइज़े पीवी. ओराइज़े के कारण होता है। यह मुख्य रूप से गर्म और आर्द्र क्षेत्रों में चावल की फसलों को प्रभावित करता है, जिससे विशेष रूप से गंभीर मामलों में उपज में महत्वपूर्ण नुकसान होता है।
-
-लक्षण:
-
-प्रारंभिक घाव: पत्ती के किनारों पर पानी से लथपथ धारियाँ दिखाई देती हैं, जो रोग के बढ़ने पर धीरे-धीरे पीली और फिर भूरी हो जाती हैं।
-
-वी-आकार के घाव: धारियाँ अक्सर पत्ती के सिरे और किनारों से फैलती हैं, जो एक विशिष्ट वी आकार बनाती हैं।
-
-पत्ती सूखना: गंभीर रूप से प्रभावित पत्तियाँ सूख जाती हैं और हल्के भूरे या सफेद रंग की हो जाती हैं, जिससे झुलसी हुई दिखती हैं।
-
-रुका हुआ विकास: पौधों में विकास रुक सकता है, टिलरिंग कम हो सकती है और अनाज की उपज कम हो सकती है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: संक्रमण के जोखिम को कम करने के लिए रोग प्रतिरोधी चावल की किस्में लगाएँ।
-
-2. बीज उपचार: प्रमाणित, रोग-मुक्त बीजों का उपयोग करें और संभावित रोगाणुओं को मारने के लिए बीजों को जीवाणुनाशकों या गर्म पानी से उपचारित करें।
-
-3. खेत की सफाई: बैक्टीरिया के स्रोतों को कम करने के लिए कटाई के बाद फसल के अवशेषों और संक्रमित पौधों को हटा दें और नष्ट कर दें।
-
-4. संतुलित उर्वरक: अत्यधिक नाइट्रोजन के प्रयोग से बचें क्योंकि यह रोग की संवेदनशीलता को बढ़ा सकता है। पर्याप्त पोटेशियम और फास्फोरस के साथ संतुलित उर्वरक का उपयोग करें।
-
-5. जल प्रबंधन: बैक्टीरिया के प्रसार को सीमित करने के लिए जल स्तर को ठीक से प्रबंधित करें और लंबे समय तक खड़े पानी से बचें।
-
-6. भीड़भाड़ से बचें: वायु प्रवाह को बेहतर बनाने और नमी को कम करने के लिए अनुशंसित घनत्व पर चावल लगाएँ, जिससे बैक्टीरिया का प्रसार सीमित हो।
-
-इलाज:
-
-1. कॉपर-आधारित जीवाणुनाशक: कॉपर-आधारित यौगिकों का छिड़काव बैक्टीरिया के प्रसार को प्रबंधित करने में मदद कर सकता है:
-
-कॉपर हाइड्रॉक्साइड (जैसे, कोसाइड)
-
-कॉपर ऑक्सीक्लोराइड
-
-2. एंटीबायोटिक उपचार: स्ट्रेप्टोमाइसिन-आधारित स्प्रे या ऑक्सीटेट्रासाइक्लिन वाले यौगिक बैक्टीरिया के विकास को प्रबंधित करने में मदद कर सकते हैं, लेकिन प्रतिरोध को रोकने के लिए इनका उपयोग सावधानी से किया जाना चाहिए।
-
-3. जैविक नियंत्रण: जीवाणु रोगजनक की गतिविधि को दबाने के लिए स्यूडोमोनास फ्लोरोसेंस जैसे जैविक एजेंटों का उपयोग करें।
-
-4. प्रारंभिक हस्तक्षेप: फसल की नियमित रूप से निगरानी करें, और प्रसार को रोकने के लिए शुरुआती लक्षण दिखाई देने पर तुरंत कार्रवाई करें।
-
-मुख्य बिंदु:
-
-कोई पूर्ण इलाज नहीं: संक्रमण गंभीर हो जाने पर चावल के जीवाणु पत्ती झुलसा का कोई इलाज नहीं है। इसलिए, रोकथाम और प्रारंभिक नियंत्रण आवश्यक है।
-
-एकीकृत रोग प्रबंधन (IDM): प्रभावी नियंत्रण के लिए प्रतिरोधी किस्मों, उचित क्षेत्र प्रबंधन, संतुलित निषेचन और रासायनिक उपचारों के उपयोग को संयोजित करें।
-
-सतर्कता बनाए रखने और समय रहते निवारक उपाय लागू करने से चावल के जीवाणुजनित पत्ती झुलसा रोग के गंभीर खतरे को काफी हद तक कम किया जा सकता है तथा फसल की पैदावार को सुरक्षित रखा जा सकता है।""")
-                    
-                elif result=="Rice_brown_spot":
-                    st.header("Rice Brown Spot")
-                    st.markdown("""
-चावल का भूरा धब्बा एक फफूंदजन्य रोग है जो बाइपोलारिस ओराइज़े (पहले हेल्मिन्थोस्पोरियम ओराइज़े) के कारण होता है। यह खराब मिट्टी की स्थिति और अपर्याप्त पोषण वाले क्षेत्रों में आम है, जो चावल की उपज और गुणवत्ता दोनों को प्रभावित करता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों पर भूरे रंग के केंद्र और गहरे भूरे रंग के किनारों के साथ छोटे, गोलाकार से अंडाकार भूरे रंग के घाव दिखाई देते हैं।
-
-पत्ती सूखना: गंभीर संक्रमण के कारण पत्तियाँ भूरी हो सकती हैं और समय से पहले मर सकती हैं।
-
-दानों का रंग बदलना: चावल के दानों पर काले धब्बे दिखाई दे सकते हैं, जिससे उनकी बाजार में बिक्री कम हो सकती है।
-
-विकास में रुकावट: पौधे अवरुद्ध हो सकते हैं, और पैनिकल विकास प्रभावित हो सकता है।
-
-रोकथाम:
-
-1. पोषक तत्व प्रबंधन: पौधों की प्रतिरोधक क्षमता को मजबूत करने के लिए उचित मिट्टी पोषण, विशेष रूप से पोटेशियम और फास्फोरस के पर्याप्त स्तर सुनिश्चित करें।
-
-2. बीज उपचार: प्रमाणित रोग मुक्त बीजों का उपयोग करें और प्रारंभिक संक्रमण को कम करने के लिए रोपण से पहले बीजों को कवकनाशी से उपचारित करें।
-
-3. उचित जल प्रबंधन: उचित जल स्तर बनाए रखें और सूखे जैसी तनावपूर्ण स्थितियों से बचें, जो पौधों को संक्रमण के लिए प्रवण बना सकती हैं।
-
-4. फसल चक्रण: रोग चक्र को तोड़ने के लिए गैर-मेजबान फसलों के साथ फसल चक्रण का अभ्यास करें।
-
-5. खेत की सफाई: खेत में फफूंद बीजाणुओं की उपस्थिति को कम करने के लिए कटाई के बाद फसल अवशेषों को हटा दें और नष्ट कर दें।
-
-इलाज:
-
-1. कवकनाशी का प्रयोग: रोग के विकास के शुरुआती चरणों के दौरान उपयुक्त कवकनाशी का प्रयोग करें:
-
-मैनकोज़ेब
-
-ट्राईसाइक्लाज़ोल
-
-प्रोपिकोनाज़ोल
-
-2. बीज उपचार कवकनाशी: प्रारंभिक कवक भार को कम करने के लिए बुवाई से पहले बीजों को कार्बेन्डाजिम या थिरम से उपचारित करें।
-
-3. समय पर प्रयोग: लक्षणों के पहले संकेत पर कवकनाशी का प्रयोग करें और रोग के दबाव और पर्यावरणीय परिस्थितियों के आधार पर आवश्यकतानुसार दोहराएं।
-
-4. संतुलित उर्वरक: पौधे के स्वास्थ्य और प्रतिरोध को बेहतर बनाने के लिए मिट्टी को कार्बनिक पदार्थ और संतुलित उर्वरकों से पूरक करें।
-
-मुख्य बिंदु:
-
-खेतों की नियमित निगरानी करें: प्रारंभिक पहचान और उपचार से महत्वपूर्ण उपज हानि को रोका जा सकता है।
-
-एकीकृत प्रबंधन: चावल के भूरे धब्बे के प्रभावी प्रबंधन के लिए उचित पोषण और खेत की सफाई जैसी सांस्कृतिक प्रथाओं को रासायनिक नियंत्रण के साथ मिलाएं।
-
-अच्छी कृषि पद्धतियों और समय पर कवकनाशी के उपयोग के साथ एक सक्रिय दृष्टिकोण अपनाने से चावल के भूरे धब्बे के प्रभाव को प्रबंधित करने और कम करने में मदद मिल सकती है, जिससे स्वस्थ फसलें और बेहतर पैदावार सुनिश्चित हो सकती है।
-""")
-                    
-                elif result=="Rice_leaf_blast":
-                    st.header("Rice Leaf Blast")
-                    st.markdown(""" 
-चावल की पत्ती का धब्बा चावल को प्रभावित करने वाली सबसे विनाशकारी फंगल बीमारियों में से एक है, जो मैग्नापोर्थे ओरिजे (पूर्व में पाइरिकुलरिया ओरिजे) के कारण होती है। यह बीमारी खास तौर पर गर्म, नम परिस्थितियों में उपज में महत्वपूर्ण नुकसान पहुंचा सकती है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों पर भूरे रंग के केंद्र और भूरे रंग की सीमाओं के साथ हीरे के आकार या धुरी के आकार के घाव दिखाई देते हैं। ये धब्बे बड़े हो सकते हैं और आपस में जुड़ सकते हैं, जिससे बड़े, मृत क्षेत्र बन सकते हैं।
-
-कॉलर रॉट: यह बीमारी कॉलर को प्रभावित कर सकती है जहां पत्ती ब्लेड और म्यान मिलते हैं, जिससे पत्ती मर जाती है।
-
-नोड और पैनिकल ब्लास्ट: गंभीर मामलों में, फंगस नोड्स को संक्रमित करता है, जिससे तना कमजोर हो जाता है और टूट जाता है। पैनिकल ब्लास्ट से अनाज का अधूरा भरना या पैनिकल ब्लाइट हो सकता है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: चावल की ऐसी किस्में लगाएं जो पत्ती के धब्बा के प्रति प्रतिरोधक क्षमता के लिए जानी जाती हैं।
-
-2. संतुलित उर्वरक: संतुलित मात्रा में नाइट्रोजन डालें। अत्यधिक नाइट्रोजन से भरपूर वृद्धि होती है, जो संक्रमण के प्रति अधिक संवेदनशील होती है।
-
-3. जल प्रबंधन: धान के खेतों में पानी का स्तर स्थिर बनाए रखें। बारी-बारी से गीला करना और सुखाना संवेदनशीलता को बढ़ा सकता है।
-
-4. रोपण घनत्व: पर्याप्त वायु संचार सुनिश्चित करने और पौधों के आसपास नमी को कम करने के लिए भीड़भाड़ वाले रोपण से बचें।
-
-5. खेत की स्वच्छता: फफूंद बीजाणुओं के स्रोतों को सीमित करने के लिए कटाई के बाद फसल अवशेषों और संक्रमित पौधों के हिस्सों को हटा दें और नष्ट कर दें।
-
-इलाज:
-
-1. कवकनाशी का प्रयोग:
-
-ट्राईसाइक्लाज़ोल: चावल ब्लास्ट को नियंत्रित करने में प्रभावी।
-
-आइसोप्रोथिओलेन (जैसे, फ़ूजी-वन)
-
-एडिफेनफोस (जैसे, हिनोसन)
-
-2. समय पर छिड़काव: संक्रमण के शुरुआती चरण में या फफूंद वृद्धि (उच्च आर्द्रता और मध्यम तापमान) के लिए अनुकूल मौसम के दौरान निवारक उपाय के रूप में कवकनाशी का प्रयोग करें।
-
-3. फसल निगरानी: संक्रमण के शुरुआती लक्षणों के लिए नियमित रूप से फसलों का निरीक्षण करें और आवश्यकतानुसार उपचार करें।
-
-4. सिलिकॉन निषेचन: मिट्टी में सिलिकॉन मिलाने से पौधों की कोशिका भित्ति मजबूत हो सकती है, जिससे वे फफूंद के प्रवेश के प्रति कम संवेदनशील हो जाते हैं।
-
-मुख्य बिंदु:
-
-एकीकृत रोग प्रबंधन (IDM): प्रभावी प्रबंधन के लिए प्रतिरोधी किस्मों, सांस्कृतिक प्रथाओं और रासायनिक नियंत्रण के उपयोग को संयोजित करें।
-
-त्वरित कार्रवाई: प्रारंभिक लक्षणों पर तत्काल प्रतिक्रिया रोग को पूरी फसल में फैलने से रोकने में मदद कर सकती है।
-
-चावल के पत्ती विस्फोट को प्रभावी ढंग से प्रबंधित करने और उपज की रक्षा करने के लिए नियमित निगरानी, ​​संतुलित पोषक तत्व अनुप्रयोग और निवारक और उपचारात्मक उपायों का संयोजन आवश्यक है।
-""")
-                elif result=="Sugarcan_Mosaic":
-                    st.header("Sugarcane Mosaic")
-                    st.markdown("""     """)
-                elif result=="Wheat_Loose_Smut":
-                    st.header("गेहूं लूज स्मट")
-                    st.markdown(""" 
-गेहूं लूज स्मट एक फंगल रोग है जो यूस्टिलागो ट्रिटिकी के कारण होता है। यह गेहूं के पौधों को प्रणालीगत रूप से संक्रमित करता है, जिससे नियंत्रित न होने पर गंभीर उपज हानि होती है। फंगस गेहूं के सिर में दानों की जगह काले, पाउडर जैसे बीजाणु द्रव्यमान ले लेता है।
-
-लक्षण:
-
-काले, पाउडर जैसे स्पाइक्स: संक्रमित गेहूं के स्पाइक्स पहले तो सामान्य दिखते हैं, लेकिन जल्द ही अनाज के सिर के उभरने के साथ काले, कालिख जैसे द्रव्यमान में विकसित हो जाते हैं।
-
-कोई दाना नहीं बनता: ​​फंगल बीजाणु विकासशील दानों की जगह ले लेते हैं, जिससे अनाज नहीं बनता।
-
-जल्दी पकने की उपस्थिति: संक्रमित पौधे स्वस्थ पौधों की तुलना में जल्दी परिपक्व हो सकते हैं, क्योंकि स्मट बीजाणु समय से पहले निकल आते हैं।
-
-रोकथाम:
-
-1. रोग मुक्त बीज का उपयोग करें: प्रमाणित, रोग मुक्त बीज या फंगल बीजाणुओं को हटाने के लिए उपचारित बीज बोएँ।
-
-2. प्रतिरोधी किस्में: गेहूं की ऐसी किस्मों का उपयोग करें जो लूज स्मट के लिए प्रतिरोधी हों।
-
-3. फसल चक्रण: रोग चक्र को तोड़ने के लिए गैर-मेजबान फसलों के साथ फसल चक्रण लागू करें।
-
-4. बीज उपचार: संक्रमण को रोकने के लिए बीजों को प्रणालीगत कवकनाशी से उपचारित करें।
-
-उपचार:
-
-1. कवकनाशी बीज उपचार:
-
-कार्बोक्सिन-आधारित कवकनाशी (जैसे, विटावैक्स)
-
-प्रभावी उपचार के रूप में टेबुकोनाज़ोल या ट्रायडिमेनॉल
-
-2. गर्म पानी से बीज उपचार: जैविक प्रबंधन के लिए, कवक को मारने के लिए बीजों को 10-15 मिनट के लिए गर्म पानी (52-54 डिग्री सेल्सियस) में भिगोएँ, हालाँकि बीज को नुकसान पहुँचाने से बचने के लिए इस विधि को सावधानी से किया जाना चाहिए।
-
-3. प्रारंभिक हस्तक्षेप: एक बार खेत में लक्षण दिखाई देने के बाद, प्रभावित पौधों को ठीक करने में बहुत देर हो चुकी होती है; बीज उपचार के माध्यम से रोकथाम आवश्यक है।
-
-मुख्य बिंदु:
-
-प्रणालीगत प्रकृति: कवक अंकुर अवस्था में गेहूं को संक्रमित करता है और पौधे के परिपक्व होने तक निष्क्रिय रहता है, इसलिए रोकथाम के लिए बीजों का उपचार करना महत्वपूर्ण है।
-
-दीर्घकालिक नियंत्रण: नियमित रूप से उपचारित बीजों का उपयोग करने और फसलों को बदलने से लूज स्मट की घटनाओं को प्रभावी रूप से कम किया जा सकता है।
-
-उचित बीज भंडारण: सुनिश्चित करें कि संदूषण को रोकने के लिए बीजों को सूखे, स्वच्छ वातावरण में संग्रहित किया जाए।
-
-इन निवारक उपायों का पालन करके और बीजों का उचित उपचार करके, गेहूं की फसलों को लूज स्मट के हानिकारक प्रभावों से बचाया जा सकता है।""")
-
-                elif result=="Wheat_Yellow_rust":
-                    st.header("गेहूं का पीला रतुआ")
-                    st.markdown(""" 
-गेहूं का पीला रतुआ, जिसे गेहूं की धारीदार जंग के नाम से भी जाना जाता है, एक फंगल रोग है जो पुकिनिया स्ट्रीफॉर्मिस एफ. एसपी. ट्रिटिकी के कारण होता है। यह ठंडे, नम वातावरण में पनपता है और अगर इसका उचित प्रबंधन न किया जाए तो यह उपज में महत्वपूर्ण नुकसान पहुंचा सकता है।
-
-लक्षण:
-
-पीली धारियाँ: पत्तियों की ऊपरी सतह पर नसों के साथ धारियों में लंबे, संकीर्ण पीले रंग के दाने बनते हैं, जिससे इस रोग को यह नाम मिलता है।
-
-पत्ती सूखना: अत्यधिक संक्रमित पत्तियाँ समय से पहले मुरझा सकती हैं और मर सकती हैं।
-
-अनाज की गुणवत्ता में कमी: गंभीर संक्रमण से अनाज का वजन और गुणवत्ता कम हो सकती है।
-
-तने और ग्लूम पर दाने: कुछ मामलों में, तने और सिर के ग्लूम पर दाने दिखाई दे सकते हैं।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: गेहूं की ऐसी किस्में लगाएँ जो पीले रतुआ के प्रति प्रतिरोधी या सहनशील हों।
-
-2. जल्दी बुवाई: मौसम के रोग के अनुकूल होने से पहले पौधों को अधिक प्रतिरोधी अवस्था में पहुँचने में मदद करने के लिए गेहूं की जल्दी बुवाई करें।
-
-3. खेत की निगरानी: रोग के शुरुआती लक्षणों का पता लगाने के लिए नियमित रूप से खेतों की निगरानी करें, खासकर ठंडी, गीली अवधि के दौरान।
-
-4. फसल चक्र: मिट्टी में जंग के बीजाणुओं की उपस्थिति को कम करने के लिए फसलों को घुमाएँ।
-
-5. स्वैच्छिक पौधों को हटाएँ: स्वैच्छिक गेहूं और अन्य घास के मेजबानों को मिटा दें जो बढ़ते मौसमों के बीच जंग को आश्रय दे सकते हैं।
-
-इलाज:
-
-1. कवकनाशी का प्रयोग:
-
-ट्रायज़ोल-आधारित कवकनाशी (जैसे, टेबुकोनाज़ोल, प्रोपिकोनाज़ोल)
-
-स्ट्रोबिलुरिन-आधारित कवकनाशी (जैसे, एज़ोक्सीस्ट्रोबिन)
-
-बेहतर नियंत्रण के लिए टेबुकोनाज़ोल + एज़ोक्सीस्ट्रोबिन जैसे संयोजन उत्पाद
-
-2. समय पर छिड़काव: संक्रमण के पहले संकेत पर या रोग के विकास के लिए अनुकूल परिस्थितियों में निवारक उपाय के रूप में कवकनाशी का प्रयोग करें।
-
-3. एकीकृत रोग प्रबंधन: रोग को प्रभावी ढंग से प्रबंधित करने के लिए सांस्कृतिक प्रथाओं और कवकनाशी अनुप्रयोगों को मिलाएं।
-
-मुख्य बिंदु:
-
-मौसम की निगरानी करें: पीला रतुआ ठंडी (10-15 डिग्री सेल्सियस) और गीली स्थितियों में पनपता है, इसलिए मौसम की निगरानी निवारक उपायों की योजना बनाने में मदद कर सकती है।
-
-प्रतिरोध टूटना: कवक नए उपभेदों को विकसित कर सकता है जो प्रतिरोध को दूर करते हैं, इसलिए कई प्रबंधन रणनीतियों का उपयोग करना महत्वपूर्ण है।
-
-प्रारंभिक उपचार: पीले रतुआ के पहले संकेत पर तुरंत कवकनाशी का प्रयोग इसके प्रसार को सीमित करने और उपज की रक्षा करने में मदद कर सकता है।
-
-प्रतिरोधी किस्मों, अच्छी सांस्कृतिक प्रथाओं और समय पर कवकनाशी के प्रयोग के संयोजन का उपयोग करके गेहूं के पीले रतुआ को प्रबंधित करने और गेहूं के उत्पादन पर इसके प्रभाव को कम करने में मदद मिल सकती है।
-""")
-
-                elif result=="Sugarcan_Mosaic":
-                    st.header("गन्ना मोज़ेक")
-                    st.markdown("""गन्ना मोज़ेक एक वायरल बीमारी है जो गन्ना मोज़ेक वायरस (SCMV) के कारण होती है। यह चीनी की पैदावार और समग्र फसल स्वास्थ्य में महत्वपूर्ण कमी ला सकता है। वायरस एफिड्स द्वारा फैलता है और संक्रमित पौधे की सामग्री के माध्यम से भी फैल सकता है।
-
-लक्षण:
-
-मोज़ेक पैटर्न: पत्तियों पर हल्के और गहरे हरे रंग के धब्बे दिखाई देते हैं, जो मोज़ेक जैसा पैटर्न बनाते हैं।
-
-रुका हुआ विकास: संक्रमित पौधे रुका हुआ विकास और कम शक्ति दिखा सकते हैं।
-
-पत्ती विकृति: पत्तियां विकृत हो सकती हैं या अनियमित धारियाँ दिखा सकती हैं।
-
-कम उपज: गंभीर संक्रमण से गन्ना और चीनी उत्पादन में कमी आ सकती है।
-
-रोकथाम:
-
-1. रोग मुक्त सामग्री लगाएँ: प्रारंभिक संक्रमण को रोकने के लिए प्रमाणित, वायरस मुक्त बीज गन्ना का उपयोग करें।
-
-2. प्रतिरोधी किस्में: गन्ने की ऐसी किस्में लगाएँ जो मोज़ेक वायरस के प्रति प्रतिरोधी या सहनशील हों।
-
-3. एफिड नियंत्रण: वायरस के प्रसार को कम करने के लिए जैविक नियंत्रण विधियों या कीटनाशकों का उपयोग करके एफिड आबादी का प्रबंधन करें।
-
-4. फसल चक्रण: फसल चक्रण लागू करें और बीमारी के इतिहास वाले खेतों में गन्ना लगाने से बचें।
-
-5. खेत की सफाई: संक्रमित पौधों और खरपतवारों को हटा दें और नष्ट कर दें जो वायरस के भंडार के रूप में कार्य कर सकते हैं।
-
-इलाज:
-
-कोई सीधा इलाज नहीं: वायरल संक्रमण के लिए कोई रासायनिक इलाज नहीं है। प्रबंधन रोकथाम और नियंत्रण उपायों पर केंद्रित है।
-
-एफिड प्रबंधन:
-
-एफिड आबादी को नियंत्रित करने के लिए इमिडाक्लोप्रिड जैसे कीटनाशकों का उपयोग करें।
-
-रोग निवारण: खेत के भीतर प्रसार को कम करने के लिए संक्रमित पौधों को हटा दें और नष्ट कर दें।
-
-एकीकृत प्रबंधन: रोग को प्रभावी ढंग से प्रबंधित करने के लिए प्रतिरोधी किस्मों, अच्छी सांस्कृतिक प्रथाओं और वेक्टर नियंत्रण के उपयोग को मिलाएं।
-
-मुख्य बिंदु:
-
-वायरस संचरण: वायरस फैलने का प्राथमिक तरीका एफिड्स के माध्यम से है, इसलिए वेक्टर नियंत्रण आवश्यक है।
-
-नियमित निगरानी: संक्रमित पौधों की पहचान करने और उन्हें जल्दी हटाने के लिए अक्सर खेतों का निरीक्षण करें।
-
-प्रतिरोधी किस्में: गन्ने के मोजेक के प्रभाव को कम करने के लिए लगातार बेहतर प्रतिरोधी किस्मों की तलाश करें और उनका उपयोग करें।
-
-गन्ने के मोजेक के प्रभावी प्रबंधन में निवारक उपाय, खेतों की सावधानीपूर्वक निगरानी और फसलों को संक्रमण से बचाने और उपज हानि को कम करने के लिए वेक्टर नियंत्रण शामिल है।
-""")
-
-                elif result=="Sugarcane_RedRot":
-                    st.header("गन्ना लाल सड़न")
-                    st.markdown("""
-गन्ना लाल सड़न एक गंभीर फंगल रोग है जो कोलेटोट्रीकम फाल्काटम (जिसे इसके यौन रूप में ग्लोमेरेला टुकुमेनेंसिस के रूप में भी जाना जाता है) के कारण होता है। यह गन्ने को प्रभावित करने वाली सबसे विनाशकारी बीमारियों में से एक है, जिससे गन्ने की उपज और चीनी की रिकवरी में काफी नुकसान होता है।
-
-लक्षण:
-
-लाल रंग का मलिनकिरण: प्रभावित डंठल के आंतरिक ऊतक खुलने पर सफेद धब्बों के साथ एक विशिष्ट लाल रंग दिखाते हैं।
-
-स्पंजी डंठल: संक्रमित डंठल स्पंजी हो सकते हैं और बीमारी बढ़ने पर दुर्गंध छोड़ सकते हैं।
-
-पत्तियों का पीला पड़ना और सूखना: शुरुआती लक्षणों में ऊपर से नीचे तक पत्तियों का पीला पड़ना और सूखना शामिल हो सकता है।
-
-गन्ना गिरना: गंभीर रूप से संक्रमित पौधे कमजोर होकर गिर सकते हैं।
-
-फफूंद वृद्धि: नम परिस्थितियों में, प्रभावित क्षेत्रों पर छोटे, काले फफूंदयुक्त फल दिखाई दे सकते हैं।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: गन्ने की ऐसी किस्में लगाएँ जो लाल सड़न के प्रति प्रतिरोधी या सहनशील हों।
-
-2. खेत की स्वच्छता: संक्रमण के स्रोत को कम करने के लिए कटाई के बाद संक्रमित पौधों की सामग्री को हटा दें और नष्ट कर दें।
-
-3. स्वस्थ बीज सामग्री: रोपण के लिए प्रमाणित, रोग-मुक्त बीज केन का उपयोग करें।
-
-4. फसल चक्र: मिट्टी में रोगाणुओं के निर्माण को कम करने के लिए फलियों जैसी गैर-मेजबान फसलों के साथ चक्र करें।
-
-5. पर्याप्त जल निकासी: जलभराव को रोकने के लिए उचित खेत जल निकासी सुनिश्चित करें, जो कवक के विकास को प्रोत्साहित करता है।
-
-उपचार:
-
-1. कवकनाशी उपचार:
-
-कार्बेंडाज़िम और थियोफ़ेनेट-मिथाइल आमतौर पर रोपण सामग्री का उपचार करने और संक्रमण को रोकने के लिए कवकनाशी का उपयोग किया जाता है।
-
-2. गर्म पानी का उपचार:
-
-कवक के बीजाणुओं को मारने के लिए बीज केन को 52°C पर 30 मिनट के लिए गर्म पानी में भिगोएँ।
-
-3. जैविक नियंत्रण:
-
-ट्राइकोडर्मा एसपीपी जैसे लाभकारी कवक का उपयोग करें। मिट्टी में कोलेटोट्रीकम फाल्काटम को दबाने के लिए एक जैव नियंत्रण एजेंट के रूप में।
-
-4. प्रारंभिक पहचान: शुरुआती लक्षणों के लिए नियमित निगरानी से रोग फैलने से पहले संक्रमित पौधों को हटाने की अनुमति मिलती है।
-
-मुख्य बिंदु:
-
-स्वच्छता और सफाई: लाल सड़न के प्रसार को रोकने के लिए खेत की स्वच्छता बनाए रखना और स्वस्थ रोपण सामग्री का उपयोग करना आवश्यक है।
-
-नियमित निगरानी: तुरंत कार्रवाई करने के लिए संक्रमण के शुरुआती लक्षणों की जाँच करें।
-
-एकीकृत प्रबंधन: प्रभावी रोग प्रबंधन के लिए प्रतिरोधी किस्मों, कवकनाशी अनुप्रयोग और उचित सांस्कृतिक प्रथाओं को मिलाएं।
-
-सक्रिय उपायों और समय पर उपचार के साथ, गन्ने की फसलों को लाल सड़न से बचाया जा सकता है, जिससे बेहतर पैदावार और स्वस्थ विकास सुनिश्चित होता है।""")
-    
-                elif result=="Cotton_curl_virus":
-                    st.header("गन्ना जंग विभिन्न फफूंद")
-                    st.markdown("""
-गन्ना जंग विभिन्न फफूंद रोगजनकों के कारण होने वाली बीमारी है, सबसे आम तौर पर पुकिनिया मेलानोसेफाला (भूरा जंग) और पुकिनिया कुहेनी (नारंगी जंग)। ये रोग विशेष रूप से संवेदनशील गन्ने की किस्मों में महत्वपूर्ण उपज हानि का कारण बन सकते हैं। जंग रोग गर्म, आर्द्र वातावरण में पनपते हैं।
-
-लक्षण:
-
-लाल-भूरे या नारंगी रंग के दाने: पत्तियों के नीचे छोटे, उभरे हुए दाने विकसित होते हैं, जो उन्हें जंग के प्रकार के आधार पर लाल-भूरे या नारंगी रंग का रूप देते हैं।
-
-पीली पत्तियाँ: पत्तियों पर दानों के आसपास क्लोरोसिस (पीलापन) दिखाई दे सकता है।
-
-समय से पहले पत्ती मरना: गंभीर संक्रमण के कारण पत्तियाँ सूख सकती हैं और समय से पहले मर सकती हैं, जिससे प्रकाश संश्लेषण और उपज कम हो जाती है।
-
-कम गन्ना विकास: संक्रमित पौधों में विकास रुक सकता है और चीनी की मात्रा कम हो सकती है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: रोग के प्रभाव को कम करने के लिए जंग प्रतिरोधी गन्ने की किस्में लगाएँ।
-
-2. खेत की स्वच्छता: संक्रमण के स्रोत को कम करने के लिए कटाई के बाद संक्रमित पौधे के मलबे को हटाएँ और नष्ट करें।
-
-3. संतुलित उर्वरक: अत्यधिक नाइट्रोजन के इस्तेमाल से बचें, क्योंकि यह जंग के प्रति संवेदनशीलता को बढ़ा सकता है।
-
-4. उचित अंतराल: हवा के प्रवाह को बढ़ावा देने और पत्तियों की नमी को कम करने के लिए पौधों के बीच पर्याप्त अंतराल सुनिश्चित करें, जो जंग के विकास को बढ़ावा दे सकता है।
-
-उपचार:
-
-1. कवकनाशी का उपयोग:
-
-प्रभावी नियंत्रण के लिए प्रोपिकोनाज़ोल, टेबुकोनाज़ोल या मैन्कोज़ेब जैसे कवकनाशी का उपयोग करें।
-
-अधिकतम प्रभावकारिता के लिए निवारक उपाय के रूप में या जंग के लक्षणों के पहले संकेत पर कवकनाशी का उपयोग करें।
-
-2. समय पर छिड़काव: प्रकोप को रोकने के लिए अनुकूल मौसम की स्थिति (गर्म और आर्द्र) में कवकनाशी का उपयोग करें।
-
-3. एकीकृत कीट प्रबंधन (आईपीएम): जंग को प्रभावी ढंग से प्रबंधित करने के लिए सांस्कृतिक प्रथाओं, प्रतिरोधी किस्मों और कवकनाशी अनुप्रयोगों को मिलाएं।
-
-मुख्य बिंदु:
-
-मौसम की स्थिति पर नज़र रखें: जंग गर्म, नम जलवायु में पनपती है, इसलिए मौसम के पूर्वानुमान के आधार पर रोकथाम के उपायों को समायोजित करें।
-
-जल्दी पता लगाना: नियमित रूप से खेतों की निगरानी करने से शुरुआती लक्षणों की पहचान करने और बीमारी को फैलने से रोकने में मदद मिलती है।
-
-चक्रीय प्रबंधन: फसल चक्र का उपयोग करें और बीमारी के दबाव को कम करने के लिए एक ही खेत में लगातार गन्ना लगाने से बचें।
-
-इन निवारक और प्रबंधन रणनीतियों को अपनाकर, गन्ने की जंग को प्रभावी ढंग से नियंत्रित किया जा सकता है, जिससे स्वस्थ फसल और इष्टतम उपज सुनिश्चित हो सकती है।
-sugarcane yellwing
-गन्ने का पीलापन (पीलापन सिंड्रोम): अवलोकन, लक्षण, रोकथाम और उपचार
-
-अवलोकन:
-गन्ने का पीलापन, जिसे "पीलापन सिंड्रोम" भी कहा जाता है, एक ऐसी स्थिति है जो पत्तियों के पीलेपन और विकास में रूकावट पैदा करती है। यह पोषक तत्वों की कमी, बीमारियों और पर्यावरणीय तनाव सहित कई कारकों के कारण हो सकता है। यह स्थिति अक्सर कई अंतर्निहित कारणों से जुड़ी होती है, लेकिन एक सामान्य कारण गन्ने के पीले पत्ते के वायरस (ScYLV) द्वारा संक्रमण है।
-
-लक्षण:
-
-पुराने पत्तों का पीला पड़ना: पत्तियाँ, विशेष रूप से पुरानी पत्तियाँ, पीली हो जाती हैं, जो अक्सर सिरों से शुरू होकर अंदर की ओर बढ़ती हैं।
-
-विकास में रूकावट: संक्रमित पौधों की ऊँचाई और पत्तियों का विकास कम हो सकता है।
-
-गन्ने और चीनी की पैदावार में कमी: प्रभावित पौधों में अक्सर कम बायोमास और कम सुक्रोज सामग्री होती है।
-
-क्लोरोसिस: क्लोरोफिल के क्षरण के कारण पत्तियों का सामान्य पीलापन।
-
-शिराओं का पीलापन: कुछ मामलों में, पत्तियों पर शिराओं में ज़्यादा स्पष्ट पीलापन दिखाई दे सकता है, जबकि बाकी पत्ती हरी रहती है।
-
-कारण:
-
-1. गन्ना पीला पत्ता वायरस (ScYLV): यह वायरस मुख्य रूप से एफिड्स द्वारा फैलता है और गन्ने में पीलेपन का मुख्य कारण है।
-
-2. पोषक तत्वों की कमी: नाइट्रोजन, मैग्नीशियम या पोटेशियम जैसे आवश्यक पोषक तत्वों की कमी से पीलापन हो सकता है। नाइट्रोजन की कमी विशेष रूप से आम है।
-
-3. पानी का तनाव: जलभराव और सूखे की स्थिति दोनों ही पौधे पर दबाव डाल सकते हैं और पीलापन पैदा कर सकते हैं।
-
-4. मिट्टी से होने वाली बीमारियाँ: जड़ों या तनों में फफूंद और जीवाणु संक्रमण भी पीलेपन का कारण बन सकते हैं क्योंकि पौधे पोषक तत्वों को अवशोषित करने के लिए संघर्ष करते हैं।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्मों का उपयोग: ऐसी किस्मों का चयन करें जो गन्ना पीला पत्ता वायरस (ScYLV) और पीलेपन से जुड़ी अन्य बीमारियों के लिए प्रतिरोधी हों।
-
-2. एफिड नियंत्रण: चूंकि ScYLV एफिड जनित है, इसलिए इमिडाक्लोप्रिड जैसे कीटनाशकों का उपयोग करके एफिड आबादी को नियंत्रित करने से वायरस के संचरण को कम करने में मदद मिल सकती है।
-
-3. उचित निषेचन: संतुलित पोषक तत्वों, विशेष रूप से नाइट्रोजन, मैग्नीशियम और पोटेशियम के साथ पर्याप्त निषेचन सुनिश्चित करें, ताकि पीलेपन का कारण बनने वाली कमियों से बचा जा सके।
-
-4. जल प्रबंधन: जलभराव और सूखे के तनाव से बचने के लिए उचित सिंचाई पद्धतियाँ बनाए रखें।
-
-5. खेत की सफाई: संक्रमित पौधों और खरपतवारों को हटाएँ और नष्ट करें जो एफिड या वायरस को आश्रय दे सकते हैं।
-
-6. फसल चक्रण: रोग संचरण के चक्र को तोड़ने के लिए गैर-मेजबान पौधों के साथ फसलों को घुमाएँ।
-
-इलाज:
-
-वायरस का कोई सीधा इलाज नहीं: एक बार जब पौधे गन्ने के पीले पत्ते के वायरस से संक्रमित हो जाते हैं, तो कोई प्रभावी इलाज नहीं होता है। प्रबंधन रोकथाम पर केंद्रित है।
-
-संक्रमित पौधों को हटाएँ: संक्रमित पौधों का जल्दी पता लगाना और उन्हें हटाना स्वस्थ पौधों में वायरस के प्रसार को रोकने में मदद कर सकता है।
-
-कवकनाशी और जीवाणुनाशक का उपयोग: कवक या जीवाणु संक्रमण के कारण होने वाले पीलेपन के मामलों के लिए, विशिष्ट रोगों के लिए सिफारिशों के अनुसार कवकनाशी या जीवाणुनाशक का उपयोग किया जा सकता है।
-
-पोषक पूरक: कमियों को ठीक करने और पौधों के स्वास्थ्य को बेहतर बनाने के लिए सूक्ष्म पोषक तत्वों के साथ पत्तियों पर स्प्रे करें, खासकर मैग्नीशियम, पोटेशियम या नाइट्रोजन के लिए।
-
-पर्यावरण तनाव का प्रबंधन: लगातार सिंचाई करें और अत्यधिक पानी के तनाव से बचें, जो पीलेपन के लक्षणों को बढ़ा सकता है।
-
-मुख्य बिंदु:
-
-वायरस प्रबंधन: वायरस से प्रेरित पीलेपन का कोई इलाज नहीं है, इसलिए एफिड वेक्टर का प्रबंधन और प्रतिरोधी किस्मों का उपयोग करना महत्वपूर्ण है।
-
-पोषक तत्व और पर्यावरण नियंत्रण: पोषक तत्वों की कमी को दूर करना और अच्छा जल प्रबंधन सुनिश्चित करना तनाव से संबंधित पीलेपन को कम करने में मदद कर सकता है।
-
-नियमित निगरानी: पीलेपन के शुरुआती लक्षणों के लिए नियमित रूप से खेतों का निरीक्षण करें और एफिड आबादी को नियंत्रित करने और पौधों के स्वास्थ्य को बेहतर बनाने के लिए कार्रवाई करें।
-
-इन निवारक और सुधारात्मक उपायों को एकीकृत करके, स्वस्थ विकास और इष्टतम पैदावार सुनिश्चित करने के लिए गन्ने के पीलेपन को प्रभावी ढंग से प्रबंधित किया जा सकता है।
-""")
-                elif result=="Tomato_Bacterial_spot":
-                    st.header("टमाटर बैक्टीरियल स्पॉट")
-                    st.markdown("""
-टमाटर बैक्टीरियल स्पॉट बैक्टीरिया ज़ैंथोमोनस वेसिकेटोरिया के कारण होने वाली बीमारी है। यह टमाटर और मिर्च दोनों को प्रभावित करता है, जिससे पत्तियों, तनों और फलों को काफी नुकसान पहुँचता है। यह जीवाणु संक्रमण पौधे की शक्ति को कम कर सकता है, उपज को कम कर सकता है और फलों की गुणवत्ता को प्रभावित कर सकता है।
-
-लक्षण:
-
-पत्ती के धब्बे: पत्तियों पर छोटे, पानी से लथपथ धब्बे दिखाई देते हैं, जो रोग बढ़ने पर भूरे या काले हो जाते हैं।
-
-पीला प्रभामंडल: पत्तियों पर काले, परिगलित धब्बों के चारों ओर अक्सर एक पीला घेरा होता है।
-
-पत्ती परिगलन: जैसे-जैसे रोग बढ़ता है, प्रभावित क्षेत्र मर सकते हैं, जिससे पत्तियाँ गिर सकती हैं।
-
-फलों के घाव: टमाटर पर, फलों पर छोटे, धँसे हुए, काले धब्बे विकसित हो सकते हैं जो फलों की गुणवत्ता को प्रभावित करते हैं।
-
-कम वृद्धि: संक्रमित पौधों में अक्सर विकास अवरुद्ध होता है और समग्र पौधे की शक्ति में कमी आती है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: जीवाणु धब्बा के प्रति प्रतिरोधी टमाटर की किस्में लगाएँ।
-
-2. प्रमाणित बीज का उपयोग करें: प्रारंभिक संक्रमण के जोखिम को कम करने के लिए रोग-मुक्त, प्रमाणित बीज या रोपाई से शुरुआत करें।
-
-3. फसल चक्र: जीवाणु धब्बा से प्रभावित पिछली फसलों के समान स्थान पर टमाटर लगाने से बचने के लिए फसलों को घुमाएँ।
-
-4. खेत की सफाई: जीवाणु प्रसार को कम करने के लिए गिरे हुए पत्तों और मलबे सहित संक्रमित पौधों की सामग्री को हटाएँ और नष्ट करें।
-
-5. उचित दूरी: पत्तियों के चारों ओर नमी को कम करने के लिए पौधों के बीच अच्छा वायु संचार सुनिश्चित करें, जो जीवाणु वृद्धि को बढ़ावा दे सकता है।
-
-6. ओवरहेड सिंचाई से बचें: संक्रमित पौधों से स्वस्थ पौधों में बैक्टीरिया फैलने से रोकने के लिए ड्रिप सिंचाई का उपयोग करें।
-
-7. खरपतवारों पर नियंत्रण: खरपतवारों में बैक्टीरिया पनप सकते हैं, इसलिए रोग के प्रसार को रोकने के लिए खरपतवार नियंत्रण बनाए रखना महत्वपूर्ण है।
-
-इलाज:
-
-कोई सीधा इलाज नहीं: संक्रमण स्थापित होने के बाद जीवाणु धब्बा का कोई सीधा इलाज नहीं है। प्रबंधन रोकथाम और प्रसार को नियंत्रित करने पर केंद्रित है।
-
-कॉपर-आधारित कवकनाशी: कॉपर हाइड्रॉक्साइड या कॉपर ऑक्सीक्लोराइड जैसे कॉपर-आधारित जीवाणुनाशकों का उपयोग निवारक उपाय के रूप में या संक्रमण के पहले संकेत पर करें। ये जीवाणु भार को कम करने में मदद कर सकते हैं।
-
-एंटीबायोटिक्स: कुछ मामलों में, स्ट्रेप्टोमाइसिन जैसे एंटीबायोटिक्स का उपयोग किया जा सकता है, लेकिन प्रतिरोध मुद्दों के कारण कुछ क्षेत्रों में उनका उपयोग अक्सर प्रतिबंधित होता है।
-
-जैविक नियंत्रण: बैसिलस सबटिलिस या स्ट्रेप्टोमाइसेस प्रजाति जैसे जैविक एजेंट बैक्टीरिया की आबादी को कम करने और स्वस्थ पौधों की रक्षा करने में मदद कर सकते हैं।
-
-संक्रमित पौधों को हटाएँ: खेत में बैक्टीरिया के इनोकुलम को कम करने के लिए संक्रमित पौधों को हटाकर और नष्ट करके "रोगिंग" का अभ्यास करें।
-
-मुख्य बिंदु:
-
-निवारक उपाय: प्रतिरोधी किस्मों, अच्छी खेत स्वच्छता और उचित सिंचाई प्रथाओं के माध्यम से रोकथाम बैक्टीरिया स्पॉट के प्रबंधन के लिए महत्वपूर्ण हैं।
-
-नियमित निगरानी: शुरुआती लक्षणों के लिए नियमित रूप से पौधों का निरीक्षण करें और संक्रमण के प्रसार को सीमित करने के लिए कार्रवाई करें।
-
-कवकनाशी और जीवाणुनाशक का उपयोग: कॉपर-आधारित उत्पाद बैक्टीरिया के संक्रमण के प्रबंधन में प्रारंभिक या निवारक रूप से उपयोग किए जाने पर प्रभावी हो सकते हैं।
-
-रोकथाम पर ध्यान केंद्रित करके और कृषि पद्धतियों, कवकनाशकों और उचित स्वच्छता का उपयोग करके, आप टमाटर बैक्टीरियल स्पॉट का प्रबंधन कर सकते हैं और अपनी फसल पर इसके प्रभाव को कम कर सकते हैं।""")
-    
-                elif result=="Tomato_Early_blight":
-                    st.header("टमाटर का प्रारंभिक झुलसा रोग")
-                    st.markdown("""
-टमाटर का प्रारंभिक झुलसा रोग अल्टरनेरिया सोलानी के कारण होने वाला एक फफूंद रोग है। यह मुख्य रूप से टमाटर के पौधों को प्रभावित करता है, जिससे समय से पहले पत्ते गिर जाते हैं, फलों की गुणवत्ता कम हो जाती है और उपज कम हो जाती है। प्रारंभिक झुलसा रोग गर्म, आर्द्र परिस्थितियों में पनपता है और अनुकूल पर्यावरणीय परिस्थितियों में तेज़ी से फैल सकता है।
-
-लक्षण:
-
-गहरे पत्तों के धब्बे: पुरानी पत्तियों पर छोटे, गहरे भूरे या काले धब्बे दिखाई देते हैं, जिनमें संकेंद्रित छल्ले (लक्ष्य जैसे घाव) होते हैं।
-
-पत्ती का पीला पड़ना: आमतौर पर घावों के आसपास पीलापन होता है, जिससे पत्तियाँ मर सकती हैं और गिर सकती हैं।
-
-पत्ते झड़ना: पत्तियों का बहुत ज़्यादा झड़ना प्रकाश संश्लेषण को कम कर सकता है और पौधे कमज़ोर और बौने हो सकते हैं।
-
-तने और फलों के घाव: गंभीर मामलों में, तने और फलों पर, विशेष रूप से मिट्टी की रेखा के पास, गहरे रंग के घाव बन सकते हैं, जिससे सड़न और क्षय हो सकता है।
-
-विकास में कमी: संक्रमित पौधों में अक्सर विकास और शक्ति में कमी दिखाई देती है, और फल असमान रूप से पक सकते हैं।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: टमाटर की ऐसी किस्मों का उपयोग करें जो शुरुआती झुलसा के प्रति प्रतिरोधी या सहनशील हों।
-
-2. उचित अंतराल: हवा के संचार को बेहतर बनाने के लिए पौधों के बीच पर्याप्त अंतराल रखें, जिससे पौधों के आसपास नमी कम हो, जिससे फफूंद की वृद्धि को बढ़ावा मिलता है।
-
-3. फसल चक्र: रोग चक्र को तोड़ने के लिए हर साल एक ही स्थान पर टमाटर लगाने से बचने के लिए फसलों को घुमाएँ।
-
-4. स्वच्छता: फफूंद को खेत में सर्दियों में पनपने से रोकने के लिए मौसम के अंत में संक्रमित पौधों के मलबे को हटाएँ और नष्ट करें।
-
-5. जल प्रबंधन: पौधों के आधार पर पानी दें और स्वस्थ पौधों पर फफूंद के बीजाणुओं को फैलने से रोकने के लिए ओवरहेड सिंचाई से बचें।
-
-6. खरपतवार नियंत्रण: खरपतवारों को नियंत्रण में रखें, क्योंकि वे फफूंद को आश्रय दे सकते हैं और रोग के प्रसार को बढ़ा सकते हैं।
-
-उपचार:
-
-1. कवकनाशी का प्रयोग:
-
-क्लोरोथालोनिल (जैसे, डेकोनिल) और कॉपर-आधारित कवकनाशी शुरुआती झुलसा को रोकने और नियंत्रित करने के लिए प्रभावी हैं।
-
-रोग के प्रबंधन के लिए मैन्कोज़ेब और एज़ोक्सीस्ट्रोबिन का भी उपयोग किया जा सकता है।
-
-नियमित रूप से कवकनाशी का प्रयोग करें, विशेष रूप से गीले मौसम की स्थिति में जब कवक पनपता है।
-
-2. समय पर प्रयोग: रोग के प्रसार को कम करने और स्वस्थ पत्तियों की रक्षा के लिए निवारक उपाय के रूप में या लक्षणों के पहले संकेत पर कवकनाशी का प्रयोग करें।
-
-3. छंटाई: संक्रमित पौधे की सामग्री को हटाएँ और नष्ट करें, विशेष रूप से निचली पत्तियाँ जो कवक के प्रति अधिक संवेदनशील होती हैं।
-
-4. जैविक नियंत्रण: एकीकृत प्रबंधन दृष्टिकोण के भाग के रूप में ट्राइकोडर्मा या बैसिलस सबटिलिस जैसे लाभकारी सूक्ष्मजीवों का उपयोग करें।
-
-मुख्य बिंदु:
-
-पर्यावरणीय परिस्थितियाँ: प्रारंभिक तुषार गर्म, गीली परिस्थितियों में पनपता है, इसलिए पर्यावरणीय कारकों का प्रबंधन रोग के प्रसार को सीमित करने में मदद कर सकता है।
-
-प्रारंभिक पहचान: प्रारंभिक लक्षणों के लिए नियमित रूप से पौधों का निरीक्षण करें और कवकनाशी का प्रयोग करने या संक्रमित सामग्री को हटाने के लिए तुरंत कार्रवाई करें।
-
-एकीकृत प्रबंधन: प्रारंभिक तुषार का प्रभावी ढंग से प्रबंधन करने के लिए फसल चक्र, अंतराल और स्वच्छता जैसी सांस्कृतिक प्रथाओं को कवकनाशी के प्रयोग के साथ मिलाएँ।
-
-इन निवारक उपायों, शीघ्र पहचान, तथा समय पर कवकनाशी के प्रयोग से टमाटर के प्रारंभिक झुलसा रोग का प्रभावी ढंग से प्रबंधन किया जा सकता है, जिससे स्वस्थ पौधे तथा अच्छी पैदावार सुनिश्चित की जा सकती है।
-""")
-                    
-                elif result=="Tomato_Late_blight":
-                    st.header("टमाटर लेट ब्लाइट ")
-                    st.markdown("""
-टमाटर लेट ब्लाइट फाइटोफ्थोरा इन्फेस्टान के कारण होने वाला एक गंभीर फंगल रोग है, जो टमाटर और आलू दोनों को प्रभावित करता है। यह टमाटर उत्पादन में सबसे विनाशकारी रोगों में से एक है, खासकर ठंडी, गीली परिस्थितियों में। लेट ब्लाइट तेजी से नुकसान पहुंचा सकता है, जिससे अगर ठीक से प्रबंधन न किया जाए तो पूरी फसल बर्बाद हो सकती है।
-
-लक्षण:
-
-पत्तियों पर पानी से लथपथ धब्बे: शुरुआत में, पुरानी पत्तियों पर छोटे, काले, पानी से लथपथ धब्बे दिखाई देते हैं, जो जल्दी फैल जाते हैं।
-
-लीफ ब्लाइटिंग: धब्बे फैलते हैं और भूरे से काले हो जाते हैं, उनके चारों ओर एक विशिष्ट पीले रंग का प्रभामंडल होता है।
-
-सफेद फफूंद वृद्धि: आर्द्र परिस्थितियों में, प्रभावित पत्तियों के नीचे एक सफेद, फजी फफूंद वृद्धि दिखाई दे सकती है।
-
-तने पर घाव: तने पर काले घाव बन सकते हैं, खासकर मिट्टी की रेखा के पास, जिससे पौधा गिर सकता है।
-
-फल सड़न: संक्रमित फलों पर गहरे, धँसे हुए धब्बे बन जाते हैं, जो नरम सड़न का कारण बन सकते हैं, जो अक्सर गूदेदार और रंगहीन हो जाते हैं।
-
-तेजी से गिरावट: यह रोग पौधे की पत्तियों को तेजी से गिरा सकता है, जिससे प्रकाश संश्लेषण कम हो जाता है और पौधे की फल पैदा करने की क्षमता कम हो जाती है।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: टमाटर की ऐसी किस्मों का उपयोग करें जो लेट ब्लाइट के लिए प्रतिरोधी हों या रोग के प्रति कुछ हद तक सहनशील हों।
-
-2. उचित अंतराल और वायुप्रवाह: हवा के संचार को बेहतर बनाने और पौधों के चारों ओर नमी को कम करने के लिए पर्याप्त अंतराल पर टमाटर लगाएँ, जो फंगल वृद्धि को बढ़ावा देता है।
-
-3. फसल चक्रण: रोग चक्र को तोड़ने और मिट्टी में रोगाणुओं के निर्माण को कम करने के लिए टमाटर को गैर-मेजबान फसलों (जैसे, सेम, मक्का) के साथ घुमाएँ।
-
-4. स्वच्छता: संक्रमण के स्रोतों को कम करने के लिए गिरे हुए पत्तों और फलों सहित संक्रमित पौधों की सामग्री को हटाएँ और नष्ट करें।
-
-5. ओवरहेड सिंचाई से बचें: पत्तियों को सूखा रखने के लिए ड्रिप सिंचाई का उपयोग करें, क्योंकि ओवरहेड सिंचाई से पानी के छींटे रोगाणु को फैला सकते हैं।
-
-6. मौसम की निगरानी करें: लेट ब्लाइट ठंडी, गीली परिस्थितियों में पनपता है। मौसम की निगरानी करना और जब परिस्थितियाँ रोग के विकास के लिए अनुकूल हों तो निवारक उपाय करना जोखिम को कम करने में मदद कर सकता है।
-
-उपचार:
-
-1. कवकनाशी का उपयोग:
-
-क्लोरोथालोनिल, मैन्कोज़ेब, कॉपर-आधारित कवकनाशी और एज़ोक्सीस्ट्रोबिन लेट ब्लाइट को नियंत्रित करने के लिए प्रभावी कवकनाशी हैं।
-
-स्वस्थ ऊतकों की रक्षा के लिए कवकनाशी को निवारक रूप से या लक्षणों के पहले संकेत पर लागू करें।
-
-2. समय पर और लगातार छिड़काव: कवकनाशी को नियमित रूप से लागू किया जाना चाहिए, विशेष रूप से उच्च आर्द्रता और बारिश की अवधि के दौरान, जो रोग के प्रसार को बढ़ावा देते हैं।
-
-3. संक्रमित पौधों को हटाएँ: खेत में आगे के प्रसार को रोकने के लिए संक्रमित पौधों को तुरंत हटाकर नष्ट करके "रोगिंग" का अभ्यास करें।
-
-4. जैविक नियंत्रण: ट्राइकोडर्मा एसपीपी, बैसिलस सबटिलिस या स्यूडोमोनास फ्लोरोसेंस जैसे जैविक एजेंट फंगल रोगजनकों पर कुछ नियंत्रण प्रदान कर सकते हैं।
-
-मुख्य बिंदु:
-
-तेजी से फैलना: अनुकूल परिस्थितियों में लेट ब्लाइट तेजी से फैल सकता है, इसलिए समय पर कार्रवाई करना महत्वपूर्ण है।
-
-एकीकृत प्रबंधन: प्रभावी प्रबंधन के लिए प्रतिरोधी किस्मों, कवकनाशी अनुप्रयोगों और उचित अंतराल और स्वच्छता जैसी सांस्कृतिक प्रथाओं के संयोजन का उपयोग करें।
-
-जल्दी पता लगाना: लक्षणों के लिए पौधों का नियमित रूप से निरीक्षण करें और रोग के प्रसार को सीमित करने के लिए तुरंत कार्रवाई करें।
-
-इन निवारक और उपचारात्मक उपायों का उपयोग करके, टमाटर लेट ब्लाइट को प्रभावी ढंग से नियंत्रित किया जा सकता है ताकि उपज का नुकसान कम हो और आपकी टमाटर की फसल सुरक्षित रहे।""")
-                    
-
-                elif result=="Tomato_Septoria_leaf_spot":
-                    st.header("टमाटर सेप्टोरिया लीफ स्पॉट")
-                    st.markdown("""
-टमाटर सेप्टोरिया लीफ स्पॉट सेप्टोरिया लाइकोपर्सिसी के कारण होने वाला एक फंगल रोग है। यह टमाटर में सबसे आम बीमारियों में से एक है, खासकर आर्द्र और बरसात की स्थिति में। यह रोग मुख्य रूप से पत्तियों को प्रभावित करता है, जिससे प्रकाश संश्लेषण कम हो जाता है और समय से पहले पत्ते गिर जाते हैं, जो अंततः टमाटर की उपज और फलों की गुणवत्ता को प्रभावित करता है।
-
-लक्षण:
-
-छोटे, पानी से लथपथ धब्बे: शुरुआत में, छोटे, गोलाकार, पानी से लथपथ धब्बे (1/4 से 1/2 इंच व्यास के) निचली पत्तियों पर दिखाई देते हैं।
-
-गहरे भूरे या भूरे रंग के केंद्र: धब्बे बड़े हो जाते हैं और किनारों के चारों ओर पीले रंग के प्रभामंडल के साथ गहरे भूरे या भूरे रंग के हो जाते हैं।
-
-पत्ती का पीला पड़ना: जैसे-जैसे बीमारी बढ़ती है, धब्बों के आसपास के ऊतक पीले हो जाते हैं, जिससे पत्तियों का क्लोरोसिस (पीला पड़ना) हो जाता है।
-
-पत्ती का गिरना: गंभीर संक्रमण में, प्रभावित पत्तियाँ मर सकती हैं और गिर सकती हैं, जिससे पत्ते झड़ सकते हैं और पौधे की प्रकाश संश्लेषण क्षमता कम हो सकती है।
-
-ऊपरी पत्तियों तक फैलना: यह रोग निचली पत्तियों से ऊपरी पत्तियों तक फैलता है क्योंकि कवक पौधे को संक्रमित करना जारी रखता है।
-
-फलों पर कोई प्रभाव नहीं: जबकि रोग मुख्य रूप से पत्तियों को प्रभावित करता है, यह आमतौर पर फलों को सीधे नुकसान नहीं पहुंचाता है जब तक कि पौधा गंभीर रूप से कमजोर न हो जाए।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: यदि आपके क्षेत्र में उपलब्ध हो तो सेप्टोरिया लीफ स्पॉट के लिए प्रतिरोधी टमाटर की किस्में लगाएं।
-
-2. उचित अंतराल: हवा के प्रवाह को बेहतर बनाने और पत्तियों के चारों ओर नमी को कम करने के लिए पौधों के बीच पर्याप्त अंतराल रखें, जो कवक के विकास को प्रोत्साहित करता है।
-
-3. फसल चक्रण: रोग चक्र को तोड़ने और मिट्टी में इनोकुलम बिल्डअप को कम करने के लिए टमाटर को गैर-होस्ट फसलों (जैसे बीन्स या मकई) के साथ घुमाएँ।
-
-4. खेत की सफाई: संक्रमण के स्रोत को कम करने के लिए गिरे हुए पत्तों सहित संक्रमित पौधे की सामग्री को हटा दें और नष्ट कर दें।
-
-5. ओवरहेड सिंचाई से बचें: पत्तियों पर पानी के छींटे पड़ने से बचने के लिए ड्रिप सिंचाई का उपयोग करें, जो बीजाणुओं को फैला सकता है।
-
-6. खरपतवार नियंत्रण: खरपतवारों को नियंत्रण में रखें, क्योंकि वे फफूंद रोगजनकों को आश्रय दे सकते हैं और रोग के लिए भंडार का काम कर सकते हैं।
-
-7. मल्चिंग: मिट्टी के छींटे को कम करने के लिए मल्च का उपयोग करें, जो बीजाणुओं को जमीन से पत्तियों तक फैला सकता है।
-
-इलाज:
-
-1. कवकनाशी का उपयोग:
-
-क्लोरोथालोनिल, मैन्कोज़ेब और कॉपर-आधारित कवकनाशी जैसे कवकनाशी सेप्टोरिया लीफ स्पॉट को नियंत्रित करने में प्रभावी हैं।
-
-एज़ोक्सीस्ट्रोबिन और टेबुकोनाज़ोल भी नियंत्रण के लिए आमतौर पर इस्तेमाल किए जाने वाले कवकनाशी हैं।
-
-कवकनाशी को निवारक रूप से या संक्रमण के पहले संकेत पर लागू किया जाना चाहिए और अनुशंसित रूप से दोहराया जाना चाहिए, खासकर गीली स्थितियों के दौरान।
-
-2. छंटाई: रोग के प्रसार को कम करने और पौधे की छतरी में वायु परिसंचरण में सुधार करने के लिए संक्रमित निचली पत्तियों को काटें।
-
-3. संक्रमित पौधों को हटाएँ: रोग के आगे प्रसार को रोकने के लिए गंभीर रूप से संक्रमित पौधों को हटाएँ और नष्ट करें।
-
-4. जैविक नियंत्रण: कवक वृद्धि को दबाने के लिए एकीकृत कीट प्रबंधन दृष्टिकोण के भाग के रूप में बैसिलस सबटिलिस या ट्राइकोडर्मा एसपीपी जैसे जैविक कवकनाशी का उपयोग करें।
-
-मुख्य बिंदु:
-
-शीघ्र पहचान: सेप्टोरिया लीफ स्पॉट आर्द्र परिस्थितियों में तेजी से फैलता है, इसलिए नुकसान को कम करने के लिए प्रारंभिक पहचान और त्वरित कार्रवाई महत्वपूर्ण है।
-
-सांस्कृतिक प्रथाएँ: उचित अंतराल, फसल चक्र और खेत की सफाई जैसे सांस्कृतिक नियंत्रण रोग के प्रसार को रोकने के लिए आवश्यक हैं।
-
-कवकनाशी का उपयोग: नियमित रूप से कवकनाशी का उपयोग, विशेष रूप से गीली अवधि के दौरान, सेप्टोरिया लीफ स्पॉट को नियंत्रित करने में प्रभावी है।
-
-इन निवारक उपायों को लागू करके और कवकनाशी का प्रभावी ढंग से उपयोग करके, आप टमाटर सेप्टोरिया लीफ स्पॉट का प्रबंधन कर सकते हैं और अपनी फसल को महत्वपूर्ण उपज हानि से बचा सकते हैं।""")                                
-    
-                elif result=="Wheat_Brown_rust":
-                    st.header("गेहूं का भूरा रस्ट")
-                    st.markdown("""
-गेहूं का भूरा रस्ट: अवलोकन, लक्षण, रोकथाम और उपचार
-
-अवलोकन:
-गेहूं का भूरा रस्ट, जिसे लीफ रस्ट के नाम से भी जाना जाता है, फंगल रोगजनक पुकिनिया ट्रिटिसिना के कारण होता है। यह गेहूं की एक महत्वपूर्ण बीमारी है जो विशेष रूप से रोग के विकास के लिए अनुकूल परिस्थितियों में अतिसंवेदनशील किस्मों में उपज को नुकसान पहुंचा सकती है। गर्म तापमान और उच्च आर्द्रता भूरे रस्ट के प्रसार को तेज कर सकती है।
-
-लक्षण:
-
-जंग के दाने: ऊपरी पत्ती की सतह पर छोटे, गोलाकार से अंडाकार, नारंगी-भूरे रंग के दाने दिखाई देते हैं। ये दाने गंभीर मामलों में पत्ती के आवरण और तने पर भी दिखाई दे सकते हैं।
-
-बिखरा हुआ वितरण: दाने बिखरे हुए होते हैं और बीमारी बढ़ने पर पत्ती के बड़े हिस्से को कवर कर सकते हैं।
-
-पत्ती का पीला पड़ना: संक्रमण बढ़ने पर पत्ती के आस-पास के ऊतक पीले या भूरे हो सकते हैं, जिससे प्रकाश संश्लेषण कम हो जाता है।
-
-पत्ती का समय से पहले बूढ़ा होना: गंभीर संक्रमण के कारण पत्तियाँ जल्दी मर सकती हैं, जिससे पौधे की प्रभावी रूप से अनाज पैदा करने की क्षमता कम हो जाती है।
-
-अनाज की गुणवत्ता में कमी: संक्रमित पौधे सीमित पोषक तत्वों की उपलब्धता के कारण छोटे, सिकुड़े हुए अनाज पैदा कर सकते हैं।
-
-रोकथाम:
-
-1. प्रतिरोधी किस्में: गेहूँ की ऐसी किस्में लगाएँ जो भूरे रतुआ के प्रति प्रतिरोधी या मध्यम रूप से प्रतिरोधी हों।
-
-2. फसल चक्र: रोग चक्र को तोड़ने और मिट्टी में रोगाणुओं के भार को कम करने के लिए फसल चक्र अपनाएँ।
-
-3. समय पर रोपण: रतुआ के विकास के लिए अनुकूल परिस्थितियों से बचने के लिए गेहूँ को इष्टतम समय पर लगाएँ।
-
-4. खेत की निगरानी: समय पर कार्रवाई करने के लिए भूरे रतुआ के शुरुआती लक्षणों के लिए नियमित रूप से खेतों का निरीक्षण करें।
-
-5. पर्याप्त पोषण: पौधे की शक्ति को बेहतर बनाने और रोग के प्रति संवेदनशीलता को कम करने के लिए उचित पौध पोषण बनाए रखें।
-
-इलाज:
-
-1. कवकनाशी का प्रयोग:
-
-टेबुकोनाज़ोल और प्रोपिकोनाज़ोल जैसे ट्रायज़ोल कवकनाशी भूरे रतुआ को नियंत्रित करने में प्रभावी हैं।
-
-एज़ोक्सीस्ट्रोबिन जैसे स्ट्रोबिलुरिन-आधारित कवकनाशी भी रोग का प्रबंधन करने में मदद कर सकते हैं।
-
-स्वस्थ पत्तियों की रक्षा के लिए रोगनिवारक रूप से या लक्षणों के पहले संकेत पर कवकनाशी का प्रयोग करें।
-
-2. एकीकृत कवकनाशी प्रबंधन: प्रतिरोध के विकास को रोकने के लिए कवकनाशी का बारी-बारी से या संयोजन में प्रयोग करें।
-
-3. स्वैच्छिक गेहूं को हटाएँ: स्वैच्छिक गेहूं के पौधों को हटाएँ जो रोगाणु को आश्रय दे सकते हैं और नई फसलों के लिए संक्रमण के स्रोत के रूप में काम कर सकते हैं।
-
-4. नाइट्रोजन के अत्यधिक उपयोग से बचें: अत्यधिक नाइट्रोजन गेहूं के पौधों की जंग रोगों के प्रति संवेदनशीलता को बढ़ा सकता है, इसलिए संतुलित निषेचन आवश्यक है।
-
-मुख्य बिंदु:
-
-मौसम की निगरानी: चूँकि भूरा जंग गर्म और आर्द्र परिस्थितियों में पनपता है, इसलिए मौसम के पूर्वानुमान की निगरानी प्रकोप की भविष्यवाणी करने और कवकनाशी के प्रयोग के समय की जानकारी देने में मदद कर सकती है।
-
-प्रतिरोध प्रबंधन: कवक आबादी में प्रतिरोध निर्माण को रोकने के लिए अलग-अलग क्रिया विधियों के साथ कवकनाशी का प्रयोग करें।
-
-नियमित निगरानी: प्रारंभिक पहचान और समय पर कवकनाशी का प्रयोग भूरे जंग को प्रभावी ढंग से प्रबंधित करने और महत्वपूर्ण उपज हानि को रोकने में मदद कर सकता है।
-
-इन निवारक और प्रबंधन रणनीतियों को लागू करने से गेहूं के भूरे जंग को नियंत्रित करने और स्वस्थ, उत्पादक फसलों को बनाए रखने में मदद मिल सकती है।
-
-""")   
-    
-            elif result=="Apple_healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Corn_Healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Cotton_Healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Grape__healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-
-            elif result=="Pepper,_bell_healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Potato_healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Rice_Healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Sugarcane_Healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Tomato__healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-            elif result=="Wheat_Healthy":
-                    st.header("आपकी फसल स्वस्थ है")
-                    st.markdown("""आपकी फसल लहलहा रही है, और अपनी उपज को और अधिक बढ़ाने के लिए, सही उर्वरक का प्रयोग आवश्यक है।
-                    हमारी उर्वरक अनुशंसा प्रणाली इष्टतम विकास के लिए सबसे उपयुक्त उर्वरक का चयन करने में आपकी सहायता कर सकती है।""")
-
-    elif mode=="🌱फसल अनुशंसाकर्ता":
-    
-        st.title('फसल की सिफ़ारिश करने वाला 🪴')
-        st.write('')
-        st.write('')
-        st.write("")
-        st.write("कृपया अपने निकटतम मृदा परीक्षण केंद्र पर अपनी मिट्टी का परीक्षण कराएं तथा अपने क्षेत्र की मौसम की स्थिति भी जांच लें तथा नीचे दिए गए कॉलम में उचित जानकारी भरें।")
-        st.write("")
-        
-        # Create two columns for the form inputs
-        col1, col2 = st.columns([1, 1])  # This will give both columns equal width
-        with st.form("User_details"):
-            with col1:
-                N_input = st.text_input("मिट्टी में नाइट्रोजन सामग्री का प्रतिशत दर्ज करें:")
-                P_input = st.text_input("मिट्टी में फॉस्फोरस सामग्री का प्रतिशत दर्ज करें:")
-                K_input = st.text_input("मिट्टी में पोटेशियम सामग्री का प्रतिशत दर्ज करें:")
-                temp_input = st.text_input("तापमान दर्ज करें (सेल्सियस)।):")
-
-            with col2:
-                humid_input = st.text_input("आर्द्रता का प्रतिशत दर्ज करें:")
-                ph_input = st.text_input("मिट्टी का pH मान दर्ज करें:")
-                rainfall_input = st.text_input("प्राप्त वर्षा की मात्रा दर्ज करें:")
-
-            submit_button = st.form_submit_button("जमा करना")
-
-        # Actions after form submission
-        if submit_button:
-            try:
-        # Preprocess inputs (convert text inputs to numeric values)
-                temp = float(temp_input)
-                humid = float(humid_input)
-                ph = float(ph_input)
-                rainfall = float(rainfall_input)
-                N_input=int(N_input)
-                P_input=int(P_input)
-                K_input=int(K_input)
-
-                # Create a feature array (ensure it has the correct shape)
-                features = np.array([[N_input, P_input, K_input, temp, humid, ph, rainfall]])
-
-                # Load the model (ensure the path to the model is correct)
-                try:
-                    model = joblib.load(r'Models\Naive_bayes_crp.pkl')
-                except FileNotFoundError:
-                    st.error("Model file 'Naive_bayes_crp.pkl' not found. Please check the file path.")
-                    raise
-
-                # Make prediction
-                prediction = model.predict(features)  # Ensure this works with your model type
-
-                # Display the prediction or any relevant output
-                st.success(f'आपकी स्थितियों के लिए अनुमानित पौधा: {prediction[0]}')
-                st.write("")
-                st.write(f"{str.upper(prediction[0])}** आपके मौसम और मिट्टी की स्थिति के अनुसार बोई जाने वाली संभावित फसल है.")
-                st.write("")
-                st.subheader("कृपया यह भी देखें कि हम केवल किसी भी परिस्थिति में इन फसलों के लिए भविष्यवाणी करते हैं:")
-                st.write("")
-                st.write("सेब, केला, चावल, अनार, अरहर, पपीता, संतरा, खरबूजा, मूंग, मोथबीन,")
-                st.write("आम, मक्का, मसूर, राजमा, जूट, अंगूर, कपास, कॉफी, नारियल, चना, उड़द, तरबूज")
-
-
-
-            except ValueError as e:
-                st.error(f"इनपुट रूपांतरण में त्रुटि: {e}")
-            except Exception as e:
-                st.error(f"एक अप्रत्याशित त्रुटि हुई: {e}")
-
-    
